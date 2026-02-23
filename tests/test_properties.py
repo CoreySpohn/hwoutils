@@ -39,11 +39,14 @@ class TestFluxConservationProperties:
         self, ny_src, nx_src, ny_tgt, nx_tgt, pixscale_src, pixscale_tgt, rotation_deg
     ):
         """A compact source firmly inside the grid MUST conserve total flux regardless of scale or rotation."""
-        # We need a source that doesn't clip the edges to truly test conservation
-        # Put 100 flux units right in the middle
-        f_src = jnp.zeros((ny_src, nx_src), dtype=jnp.float64)
-        cy, cx = ny_src // 2, nx_src // 2
-        f_src = f_src.at[cy, cx].set(100.0)
+        # We need a well-sampled source (spline interpolation over a 1-pixel
+        # delta function mathematically cannot conserve flux when grid points
+        # miss the peak, especially during downsampling).
+        # We build a 2D Gaussian with sigma=1.5 pixels.
+        y, x = jnp.mgrid[:ny_src, :nx_src]
+        cy, cx = ny_src / 2.0, nx_src / 2.0
+        f_src = jnp.exp(-((y - cy) ** 2 + (x - cx) ** 2) / (2 * 1.5**2))
+        f_src = (f_src / jnp.sum(f_src)) * 100.0
 
         # If the target grid is physically MUCH smaller than the source grid,
         # the flux might naturally clip. We calculate physical bounds.
