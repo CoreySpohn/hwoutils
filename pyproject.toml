@@ -55,6 +55,12 @@ select = ["D", "I"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[dependency-groups]
+dev = [
+    "astropy>=7.2.0",
+    "hypothesis>=6.151.2",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/hwoutils"]
 
