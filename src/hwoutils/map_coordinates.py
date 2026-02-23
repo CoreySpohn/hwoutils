@@ -8,24 +8,26 @@ Original JAX source:
     https://github.com/google/jax/blob/main/jax/_src/scipy/ndimage.py
 """
 
+import functools
+import itertools
+import operator
 from collections.abc import Callable, Sequence
 from typing import Dict
 
 import jax
 import jax.numpy as jnp
 from jax import lax, vmap
-from jax._src import api, util
+from jax._src import api
 from jax._src.numpy.linalg import inv
 from jax._src.typing import Array, ArrayLike
-from jax._src.util import safe_zip as zip
 
 
 def _nonempty_prod(arrs: Sequence[Array]) -> Array:
-    return arrs[0] if len(arrs) == 1 else lax.reduce(arrs, lax.mul)
+    return functools.reduce(operator.mul, arrs)
 
 
 def _nonempty_sum(arrs: Sequence[Array]) -> Array:
-    return arrs[0] if len(arrs) == 1 else lax.reduce(arrs, lax.add)
+    return functools.reduce(operator.add, arrs)
 
 
 def _mirror_index_fixer(index: Array, size: int) -> Array:
@@ -188,14 +190,7 @@ def _map_coordinates(
         valid_1d_interpolations.append(valid_interp)
 
     outputs = []
-    for items in (
-        util.safe_zip(*valid_1d_interpolations)
-        if input_arr.ndim > 1
-        else [valid_1d_interpolations[0]]
-    ):
-        if input_arr.ndim == 1:
-            items = [items]
-
+    for items in itertools.product(*valid_1d_interpolations):
         indices = []
         validities = []
         weights = []
