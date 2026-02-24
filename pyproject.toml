@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = ["jax", "jaxlib"]
 [project.optional-dependencies]
-dev = ["ruff", "pre-commit"]
+dev = ["pre-commit"]
 docs = [
   "sphinx",
   "myst-nb",
@@ -47,7 +47,7 @@ content-type = "text/markdown"
 path = "README.md"
 
 [tool.ruff.lint]
-select = ["D", "I"]
+select = ["B", "D", "E", "F", "I", "UP", "RUF"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
