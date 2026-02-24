@@ -117,3 +117,73 @@ def resample_flux(
 
     # Back to integrated flux per target pixel
     return s_tgt * (pixscale_tgt**2)
+
+
+# ---------------------------------------------------------------------------
+# PSF Downsampling
+# ---------------------------------------------------------------------------
+
+
+def downsample_psf(
+    psf: jax.Array,
+    src_pixscale: float,
+    target_shape: tuple[int, int],
+) -> tuple[jax.Array, float]:
+    """Downsample a PSF to target shape while conserving total flux.
+
+    Args:
+        psf: The source PSF image (2D array).
+        src_pixscale: The pixel scale of the source PSF (in lambda/D or
+            other consistent units).
+        target_shape: The target shape (ny_tgt, nx_tgt).
+
+    Returns:
+        Tuple of (resampled_psf, new_pixscale).
+    """
+    ny_src = psf.shape[0]
+    ny_tgt = target_shape[0]
+
+    scale_factor = ny_src / ny_tgt
+    tgt_pixscale = src_pixscale * scale_factor
+
+    resampled = resample_flux(
+        psf,
+        src_pixscale,
+        tgt_pixscale,
+        target_shape,
+        rotation_deg=0.0,
+    )
+
+    return resampled, tgt_pixscale
+
+
+def downsample_psfs(
+    psfs: jax.Array,
+    src_pixscale: float,
+    target_shape: tuple[int, int],
+) -> tuple[jax.Array, float]:
+    """Downsample a stack of PSFs to target shape while conserving total flux.
+
+    Args:
+        psfs: Stack of PSF images with shape (N, H, W).
+        src_pixscale: The pixel scale of the source PSFs.
+        target_shape: The target shape (ny_tgt, nx_tgt) for each PSF.
+
+    Returns:
+        Tuple of (resampled_psfs, new_pixscale).
+    """
+    ny_tgt = target_shape[0]
+    scale_factor = psfs.shape[1] / ny_tgt
+    tgt_pixscale = src_pixscale * scale_factor
+
+    def resample_single(psf):
+        return resample_flux(
+            psf,
+            src_pixscale,
+            tgt_pixscale,
+            target_shape,
+            rotation_deg=0.0,
+        )
+
+    resample_batch = jax.vmap(resample_single)
+    return resample_batch(psfs), tgt_pixscale

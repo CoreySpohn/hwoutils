@@ -1,13 +1,13 @@
 """Tests for hwoutils.map_coordinates — cubic spline interpolation."""
 
 import jax
-import jax.numpy as jnp
-import pytest
-from scipy import ndimage
 
 jax.config.update("jax_enable_x64", True)
 
-from hwoutils.map_coordinates import map_coordinates
+import jax.numpy as jnp  # noqa: E402
+from scipy import ndimage  # noqa: E402
+
+from hwoutils.map_coordinates import map_coordinates  # noqa: E402
 
 # =============================================================================
 # Interpolation Orders
@@ -24,7 +24,7 @@ class TestInterpolationOrders:
 
     y_coords = jnp.array([0.5, 1.5], dtype=jnp.float64)
     x_coords = jnp.array([0.5, 1.5], dtype=jnp.float64)
-    coords = [y_coords, x_coords]
+    coords = (y_coords, x_coords)
 
     def test_nearest_neighbor(self):
         """Order 0 (nearest neighbor) should match SciPy."""
@@ -39,7 +39,7 @@ class TestInterpolationOrders:
         assert jnp.allclose(res_jax, res_sp)
 
     def test_cubic_spline(self):
-        """Order 3 (cubic spline) uses custom coefficients diverging slightly from SciPy."""
+        """Order 3 (cubic spline) uses custom coefficients."""
         res_jax = map_coordinates(self.f_src, self.coords, order=3)
         expected = jnp.array([2.99869792, 6.58897569])
         assert jnp.allclose(res_jax, expected, rtol=1e-5)
@@ -102,7 +102,7 @@ class TestBoundaryModes:
     )
     y_coords = jnp.array([-0.5, 2.5])
     x_coords = jnp.array([-0.5, 2.5])
-    coords = [y_coords, x_coords]
+    coords = (y_coords, x_coords)
 
     def test_constant_mode(self):
         """'constant' mode with cval."""
@@ -152,7 +152,7 @@ class TestEdgeCases:
     """Test complex edge cases that triggered previous bugs."""
 
     def test_cubic_spline_off_axis_points(self):
-        """Test the specific 2D cubic spline bug regarding safe_zip vs itertools.product.
+        """Test the 2D cubic spline bug with safe_zip vs itertools.product.
 
         The bug occurred when dimensions had multiple interpolation validities
         that needed to be mixed, typically requiring the Cartesian product

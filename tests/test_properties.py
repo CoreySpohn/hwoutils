@@ -2,12 +2,9 @@
 
 import jax
 import jax.numpy as jnp
-import pytest
 from hypothesis import given, settings
-from hypothesis.extra.numpy import arrays
-from hypothesis.strategies import floats, integers, tuples
+from hypothesis.strategies import floats, integers
 
-from hwoutils.map_coordinates import map_coordinates
 from hwoutils.transforms import ccw_rotation_matrix, resample_flux
 
 jax.config.update("jax_enable_x64", True)
@@ -38,7 +35,7 @@ class TestFluxConservationProperties:
     def test_compact_source_conservation(
         self, ny_src, nx_src, ny_tgt, nx_tgt, pixscale_src, pixscale_tgt, rotation_deg
     ):
-        """A compact source firmly inside the grid MUST conserve total flux regardless of scale or rotation."""
+        """Compact source must conserve flux regardless of scale or rotation."""
         # We need a well-sampled source (spline interpolation over a 1-pixel
         # delta function mathematically cannot conserve flux when grid points
         # miss the peak, especially during downsampling).
@@ -59,7 +56,8 @@ class TestFluxConservationProperties:
         physical_tgt_y = ny_tgt * pixscale_tgt
         physical_tgt_x = nx_tgt * pixscale_tgt
 
-        # Give a substantial margin (the spline has a 4-point stencil, which can extend 2 pixels, plus diagonal extension)
+        # Substantial margin: 4-point stencil extends 2 pixels,
+        # plus diagonal extension
         margin_y = 4.0 * pixscale_tgt
         margin_x = 4.0 * pixscale_tgt
 
@@ -106,8 +104,8 @@ class TestRotationMatrixProperties:
     def test_orthogonality(self, angle):
         """R^T @ R = I for all valid angles."""
         R = ccw_rotation_matrix(angle)
-        I = jnp.eye(2)
-        assert jnp.allclose(R.T @ R, I, atol=1e-6)
+        eye = jnp.eye(2)
+        assert jnp.allclose(R.T @ R, eye, atol=1e-6)
 
     @given(
         angle1=floats(min_value=-360.0, max_value=360.0),

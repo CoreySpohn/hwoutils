@@ -48,8 +48,9 @@ def mag_per_arcsec2_to_jy_per_arcsec2(mag_per_arcsec2):
     Returns:
         Surface brightness in Jy/arcsec².
     """
-    # Astropy calculates `to(u.Jy)` as `10**( -0.4 * (mag + 48.600000) )` and `1 Jy = 1e-23 erg/s/cm^2/Hz`
-    # which comes out to 3630.7805477010028 Jy, instead of the nominal 3631.0 Jy.
+    # Astropy calculates `to(u.Jy)` as `10**( -0.4 * (mag + 48.600000) )`
+    # and `1 Jy = 1e-23 erg/s/cm^2/Hz`
+    # which comes out to 3630.7805477010028 Jy, not the nominal 3631.0 Jy.
     f0_jy = 3630.7805477010028
     return f0_jy * 10 ** (-0.4 * mag_per_arcsec2)
 

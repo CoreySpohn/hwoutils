@@ -1,7 +1,6 @@
 """Tests for hwoutils.conversions — unit conversion functions."""
 
 import jax.numpy as jnp
-import pytest
 
 from hwoutils import constants as const
 from hwoutils import conversions as conv
@@ -41,7 +40,7 @@ class TestFluxConversions:
     def test_jy_to_photons_consistency(self):
         """Verify Jy → photons/s/m²/nm against independent first-principles calc.
 
-        Physics: F_photons = F_ν × Jy × c / (h × λ²) (per nm).
+        Physics: F_photons = F_nu * Jy * c / (h * lam^2) (per nm).
         """
         FLUX_JY = 3631.0
         WAVELENGTH_NM = 550.0
@@ -117,7 +116,7 @@ class TestAngularConversions:
         assert jnp.isclose(conv.rad_to_arcsec(conv.arcsec_to_rad(1.0)), 1.0)
 
     def test_arcsec_to_rad_value(self):
-        """1 arcsec = π / (180 × 3600) rad."""
+        """1 arcsec = pi / (180 * 3600) rad."""
         expected = jnp.pi / (180.0 * 3600.0)
         assert jnp.isclose(conv.arcsec_to_rad(1.0), expected)
 

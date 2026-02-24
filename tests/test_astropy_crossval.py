@@ -17,29 +17,33 @@ class TestConstantsValidation:
     """Ensure hardcoded constants match astropy's SI values to extreme precision."""
 
     def test_speed_of_light(self):
-        # c is exact in SI
+        """Verify c is exact in SI."""
         assert jnp.isclose(hwo_const.c, astropy_const.c.value, atol=1e-12)
 
     def test_planck_constant(self):
-        # h is exact in SI (2019 redefinition)
+        """Verify h is exact in SI (2019 redefinition)."""
         assert jnp.isclose(hwo_const.h, astropy_const.h.value, atol=1e-45)
 
     def test_boltzmann_constant(self):
-        # k_B is exact in SI (2019 redefinition)
+        """Verify k_B is exact in SI (2019 redefinition)."""
         assert jnp.isclose(hwo_const.k_B, astropy_const.k_B.value, atol=1e-35)
 
     def test_stefan_boltzmann(self):
+        """Verify sigma_SB matches astropy."""
         assert jnp.isclose(hwo_const.sigma_SB, astropy_const.sigma_sb.value, rtol=1e-12)
 
     def test_gravitational_constant(self):
+        """Verify G matches astropy."""
         assert jnp.isclose(hwo_const.G_si, astropy_const.G.value, rtol=1e-12)
 
     def test_masses(self):
+        """Verify solar, Earth, and Jupiter masses match astropy."""
         assert jnp.isclose(hwo_const.Msun2kg, astropy_const.M_sun.value, rtol=1e-12)
         assert jnp.isclose(hwo_const.Mearth2kg, astropy_const.M_earth.value, rtol=1e-12)
         assert jnp.isclose(hwo_const.Mjup2kg, astropy_const.M_jup.value, rtol=1e-12)
 
     def test_distances(self):
+        """Verify AU, parsec, and Earth radius match astropy."""
         assert jnp.isclose(hwo_const.AU2m, astropy_const.au.value, rtol=1e-12)
         assert jnp.isclose(hwo_const.pc2m, astropy_const.pc.value, rtol=1e-12)
         assert jnp.isclose(hwo_const.Rearth2m, astropy_const.R_earth.value, rtol=1e-12)
@@ -79,7 +83,8 @@ class TestConversionsValidation:
         # hwoutils conversion
         hwo_jd = hwo_conv.decimal_year_to_jd(year)
 
-        # We enforce < 0.5 days (12 hours) precision drift in epoch conversion over thousands of days
+        # We enforce < 0.5 days (12 hours) precision drift
+        # in epoch conversion over thousands of days
         assert jnp.isclose(hwo_jd, astropy_jd, atol=0.5)
 
     def test_mag_to_jy(self):

@@ -45,7 +45,7 @@ class TestRotationMatrix:
         assert jnp.allclose(rotated, expected, atol=1e-6)
 
     def test_full_rotation_identity(self):
-        """4 × 90° rotations = identity."""
+        """4 * 90 degree rotations = identity."""
         point = jnp.array([[1.0], [1.0]])
         rot90 = ccw_rotation_matrix(90.0)
         result = rot90 @ rot90 @ rot90 @ rot90 @ point
@@ -74,7 +74,7 @@ class TestResampleFlux:
         assert jnp.isclose(jnp.sum(f_tgt), jnp.sum(f_src), rtol=0.05)
 
     def test_point_source_downsampling(self):
-        """Centred point source flux is conserved on 2× downsample."""
+        """Centred point source flux is conserved on 2x downsample."""
         f_src = jnp.zeros((64, 64))
         f_src = f_src.at[32, 32].set(10000.0)
         f_tgt = resample_flux(f_src, 0.01, 0.02, (32, 32), 0.0)

@@ -12,9 +12,7 @@ import functools
 import itertools
 import operator
 from collections.abc import Callable, Sequence
-from typing import Dict
 
-import jax
 import jax.numpy as jnp
 from jax import lax, vmap
 from jax._src import api
@@ -39,7 +37,7 @@ def _reflect_index_fixer(index: Array, size: int) -> Array:
     return jnp.floor_divide(_mirror_index_fixer(2 * index + 1, 2 * size + 1) - 1, 2)
 
 
-_INDEX_FIXERS: Dict[str, Callable[[Array, int], Array]] = {
+_INDEX_FIXERS: dict[str, Callable[[Array, int], Array]] = {
     "constant": lambda index, size: index,
     "nearest": lambda index, size: jnp.clip(index, 0, size - 1),
     "wrap": lambda index, size: index % size,
@@ -89,7 +87,6 @@ def _construct_vector(data: Array, c2: Array, cnp2: Array) -> Array:
 
 
 def _solve_coefficients(data: Array, A_inv: Array, h=1) -> Array:
-    n = data.shape[0]
     finite_diff = jnp.diff(data, axis=0) / h
     c2 = 0.0
     cnp2 = 0.0
@@ -129,7 +126,7 @@ def _spline_point(coefficients: Array, coordinate: Array) -> Array:
     indexes = jnp.array([idx - 1, idx, idx + 1, idx + 2])
     t = coordinate - indexes
     weights = _spline_basis(t)
-    return [(i, w) for i, w in zip(indexes, weights)]
+    return [(i, w) for i, w in zip(indexes, weights, strict=True)]
 
 
 def _cubic_spline(input: Array, coordinates: Array) -> Array:
@@ -164,9 +161,13 @@ def _map_coordinates(
         )
 
     if mode == "constant":
-        is_valid = lambda index, size: (index >= 0) & (index < size)
+
+        def is_valid(index, size):
+            return (index >= 0) & (index < size)
     else:
-        is_valid = lambda index, size: True
+
+        def is_valid(index, size):
+            return True
 
     if order == 0:
         interp_fun = _nearest_indices_and_weights
@@ -176,11 +177,11 @@ def _map_coordinates(
         interp_fun = _cubic_indices_and_weights
     else:
         raise NotImplementedError(
-            f"jax.scipy.ndimage.map_coordinates only supports order 0, 1, or 3, got {order}"
+            f"map_coordinates only supports order 0, 1, or 3, got {order}"
         )
 
     valid_1d_interpolations = []
-    for coordinate, size in zip(coordinates_arr, input_arr.shape):
+    for coordinate, size in zip(coordinates_arr, input_arr.shape, strict=True):
         interp_nodes = interp_fun(coordinate)
         valid_interp = []
         for index, weight in interp_nodes:
