@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0](https://github.com/CoreySpohn/hwoutils/compare/v1.1.0...v1.2.0) (2026-02-25)
+
+
+### Features
+
+* Adding jax configuration utility functions ([a20e203](https://github.com/CoreySpohn/hwoutils/commit/a20e203abc8fd3f1fc9c26e586023da9c215acf9))
+
 ## [1.1.0](https://github.com/CoreySpohn/hwoutils/compare/v1.0.0...v1.1.0) (2026-02-23)
 
 
