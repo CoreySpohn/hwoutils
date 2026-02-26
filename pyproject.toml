@@ -7,7 +7,7 @@ name = "hwoutils"
 description = "Shared JAX-based utilities for the HWO direct imaging simulation suite — constants, conversions, and image transforms."
 authors = [{ name = "Corey Spohn", email = "corey.a.spohn@nasa.gov" }]
 dynamic = ['readme', 'version']
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 classifiers = [
   "Development Status :: 3 - Alpha",
