@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1](https://github.com/CoreySpohn/hwoutils/compare/v1.3.0...v1.3.1) (2026-02-26)
+
+
+### Bug Fixes
+
+* Set minimum jax version ([6e5193d](https://github.com/CoreySpohn/hwoutils/commit/6e5193d858591aa5e5f5a1d85146f1fbd4882044))
+
 ## [1.3.0](https://github.com/CoreySpohn/hwoutils/compare/v1.2.0...v1.3.0) (2026-02-26)
 
 
