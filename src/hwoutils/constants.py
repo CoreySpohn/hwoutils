@@ -13,6 +13,7 @@ import jax.numpy as jnp
 two_pi = 2 * jnp.pi
 pi_over_2 = jnp.pi / 2
 eps = jnp.finfo(jnp.float32).eps
+GAUSSIAN_FWHM_FACTOR = 2 * jnp.sqrt(2 * jnp.log(2))  # sigma to FWHM
 
 # ---------------------------------------------------------------------------
 # Fundamental physical constants (SI)
