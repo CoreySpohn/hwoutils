@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0](https://github.com/CoreySpohn/hwoutils/compare/v1.2.0...v1.3.0) (2026-02-26)
+
+
+### Features
+
+* Add gaussian FWHM constant ([f3690c0](https://github.com/CoreySpohn/hwoutils/commit/f3690c0f2a7bde4fb550a8d1c2b526c66bb6369c))
+
 ## [1.2.0](https://github.com/CoreySpohn/hwoutils/compare/v1.1.0...v1.2.0) (2026-02-25)
 
 
