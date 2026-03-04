@@ -56,7 +56,8 @@ def fft_shift_x(image, shift_pixels, phasor, clamp=True):
     """
     _n_pixels_orig, n_pad, img_edge, _n_pixels_final = get_pad_info(image, 1.5)
 
-    padded = lax.pad(image, 0.0, [(n_pad, n_pad, 0), (n_pad, n_pad, 0)])
+    pad_val = jnp.zeros((), dtype=image.dtype)
+    padded = lax.pad(image, pad_val, [(n_pad, n_pad, 0), (n_pad, n_pad, 0)])
     padded = jnp.fft.fft(padded, axis=1)
 
     phasor = jnp.tile(phasor**shift_pixels, (padded.shape[0], 1))
@@ -87,7 +88,8 @@ def fft_shift_y(image, shift_pixels, phasor, clamp=True):
     """
     _n_pixels_orig, n_pad, img_edge, _n_pixels_final = get_pad_info(image, 1.5)
 
-    padded = lax.pad(image, 0.0, [(n_pad, n_pad, 0), (n_pad, n_pad, 0)])
+    pad_val = jnp.zeros((), dtype=image.dtype)
+    padded = lax.pad(image, pad_val, [(n_pad, n_pad, 0), (n_pad, n_pad, 0)])
     padded = jnp.fft.fft(padded, axis=0)
 
     phasor = jnp.tile(phasor**shift_pixels, (padded.shape[1], 1)).T
