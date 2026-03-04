@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0](https://github.com/CoreySpohn/hwoutils/compare/v1.3.1...v1.4.0) (2026-03-04)
+
+
+### Features
+
+* Add fft utility functions ([0aa89ac](https://github.com/CoreySpohn/hwoutils/commit/0aa89acdcc67026b182290d999988d3134ec5ab9))
+
+
+### Bug Fixes
+
+* Remove hardcoded dtype in fft shift functions ([4d90db2](https://github.com/CoreySpohn/hwoutils/commit/4d90db2d6fcb0546857d20fd51694572e0057f15))
+
 ## [1.3.1](https://github.com/CoreySpohn/hwoutils/compare/v1.3.0...v1.3.1) (2026-02-26)
 
 
