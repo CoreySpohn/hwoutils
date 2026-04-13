@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0](https://github.com/CoreySpohn/hwoutils/compare/v1.4.0...v1.5.0) (2026-04-13)
+
+
+### Features
+
+* Add simple area conversions ([0925c89](https://github.com/CoreySpohn/hwoutils/commit/0925c89c17d4119f451d2e63aa27224826411a48))
+* add snapshot module for reproducible workspace tracking ([03699dd](https://github.com/CoreySpohn/hwoutils/commit/03699dd11257e47cd55876cac6cee05d3fee6cd2))
+
 ## [1.4.0](https://github.com/CoreySpohn/hwoutils/compare/v1.3.1...v1.4.0) (2026-03-04)
 
 
