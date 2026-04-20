@@ -1,8 +1,10 @@
-"""Cubic spline interpolation for JAX.
+"""Image coordinate mapping with sub-pixel interpolation for JAX.
 
-This module contains an implementation of ``map_coordinates`` with cubic spline
-interpolation. It is adapted from the JAX project (PR #14218 by Louis Desdoigts)
-and is licensed under the Apache 2.0 license.
+Adapted from the JAX project (PR #14218 by Louis Desdoigts); Apache 2.0.
+
+At ``order=3`` the kernel is the Keys cubic convolution (``a = -0.5``,
+Catmull-Rom), a true 4-tap interpolant. See ``hwoutils/docs/interpolation.md``
+for details.
 
 Original JAX source:
     https://github.com/google/jax/blob/main/jax/_src/scipy/ndimage.py
@@ -14,9 +16,8 @@ import operator
 from collections.abc import Callable, Sequence
 
 import jax.numpy as jnp
-from jax import lax, vmap
+from jax import lax
 from jax._src import api
-from jax._src.numpy.linalg import inv
 from jax._src.typing import Array, ArrayLike
 
 
@@ -64,77 +65,43 @@ def _linear_indices_and_weights(coordinate: Array) -> list[tuple[Array, Array]]:
     return [(index, lower_weight), (index + 1, upper_weight)]
 
 
-def _cubic_indices_and_weights(coordinate: Array) -> list[tuple[Array, Array]]:
-    return _spline_point(None, coordinate)
+def _keys_basis(t: Array) -> Array:
+    """Keys cubic convolution kernel with a = -0.5 (Catmull-Rom).
 
+    Piecewise cubic with compact support [-2, 2]:
 
-def _build_matrix(n: int, diag: float = 4) -> Array:
-    M = jnp.zeros((n, n))
-    idx = jnp.arange(n)
-    M = M.at[idx, idx].set(diag)
-    M = M.at[idx[:-1], idx[:-1] + 1].set(1)
-    M = M.at[idx[:-1] + 1, idx[:-1]].set(1)
-    return M
+        inner (abs(t) <= 1):       1.5 abs(t)^3 - 2.5 abs(t)^2 + 1
+        outer (1 < abs(t) <= 2):  -0.5 abs(t)^3 + 2.5 abs(t)^2 - 4 abs(t) + 2
+        else:                     0
 
-
-def _construct_vector(data: Array, c2: Array, cnp2: Array) -> Array:
-    n = data.shape[0]
-    d = jnp.zeros(n)
-    d = d.at[0].set(6 * data[0] - c2)
-    d = d.at[-1].set(6 * data[-1] - cnp2)
-    d = d.at[1:-1].set(6 * data[1:-1])
-    return d
-
-
-def _solve_coefficients(data: Array, A_inv: Array, h=1) -> Array:
-    finite_diff = jnp.diff(data, axis=0) / h
-    c2 = 0.0
-    cnp2 = 0.0
-    d = vmap(_construct_vector, in_axes=(1, None, None))(finite_diff, c2, cnp2)
-    c = vmap(jnp.dot, in_axes=(None, 0))(A_inv, d).T
-    c = jnp.concatenate(
-        [jnp.zeros((1, c.shape[1])), c, jnp.zeros((1, c.shape[1]))], axis=0
-    )
-    return c
-
-
-def _spline_coefficients(data: Array) -> Array:
-    n = data.shape[0]
-    A = _build_matrix(n - 2)
-    A_inv = inv(A)
-    coefficients = _solve_coefficients(data, A_inv)
-    return coefficients
-
-
-def _spline_basis(t: Array) -> Array:
+    Properties:
+      - True interpolant: K(0) = 1, K(k) = 0 for non-zero integer k,
+        so evaluating at integer grid points returns the sample exactly.
+      - Partition of unity at integer grid spacing: sum over integer
+        shifts of K equals 1 for any offset. This makes it
+        flux-preserving on integer downsampling of band-limited inputs.
+      - Reproduces constants and linear functions exactly under
+        translation; reproduces quadratics approximately (O(h^3)).
+      - Has small negative lobes (min value ~ -0.0625), so outputs can
+        be slightly negative even for non-negative inputs.
+    """
     abs_t = jnp.abs(t)
+    inner = 1.5 * abs_t**3 - 2.5 * abs_t**2 + 1.0
+    outer = -0.5 * abs_t**3 + 2.5 * abs_t**2 - 4.0 * abs_t + 2.0
     return jnp.where(
-        abs_t <= 1,
-        2 / 3 - abs_t**2 + abs_t**3 / 2,
-        jnp.where(abs_t <= 2, (2 - abs_t) ** 3 / 6, 0.0),
+        abs_t <= 1.0,
+        inner,
+        jnp.where(abs_t <= 2.0, outer, 0.0),
     )
 
 
-def _spline_value(coefficients: Array, coordinate: Array, indexes: Array) -> Array:
-    t = coordinate - indexes
-    weights = _spline_basis(t)
-    return jnp.sum(coefficients * weights, axis=0)
-
-
-def _spline_point(coefficients: Array, coordinate: Array) -> Array:
+def _cubic_indices_and_weights(coordinate: Array) -> list[tuple[Array, Array]]:
+    """4-tap Keys stencil: samples at floor(coord) + {-1, 0, 1, 2}."""
     idx = jnp.floor(coordinate).astype(jnp.int32)
     indexes = jnp.array([idx - 1, idx, idx + 1, idx + 2])
     t = coordinate - indexes
-    weights = _spline_basis(t)
+    weights = _keys_basis(t)
     return [(i, w) for i, w in zip(indexes, weights, strict=True)]
-
-
-def _cubic_spline(input: Array, coordinates: Array) -> Array:
-    coefficients = _spline_coefficients(input)
-    indexes = jnp.arange(input.shape[0])
-    return vmap(_spline_value, in_axes=(None, 0, None))(
-        coefficients, coordinates, indexes
-    )
 
 
 def _map_coordinates(
@@ -200,7 +167,7 @@ def _map_coordinates(
             weights.append(weight)
             validities.append(valid)
 
-        if all(googles is True for googles in validities):
+        if all(v is True for v in validities):
             contribution = input_arr[tuple(indices)]
         else:
             all_valid = _nonempty_prod(validities) if validities else True
@@ -221,12 +188,21 @@ def map_coordinates(
     mode: str = "constant",
     cval: ArrayLike = 0.0,
 ) -> Array:
-    """Map coordinates using cubic spline interpolation.
+    """Map an input array onto new coordinates via sub-pixel interpolation.
 
     Args:
         input: The input array.
         coordinates: Sequence of coordinate arrays for each dimension.
-        order: Interpolation order (0=nearest, 1=linear, 3=cubic spline).
+        order: Interpolation order:
+
+            - 0: nearest neighbor.
+            - 1: linear.
+            - 3: Keys cubic convolution (``a = -0.5``, Catmull-Rom). A
+              true 4-tap interpolant with partition of unity at integer
+              grid spacing, so resampling preserves sample values at
+              integer offsets and conserves flux on integer downsampling
+              of band-limited inputs. See ``docs/interpolation.md``.
+
         mode: Boundary handling ('constant', 'nearest', 'wrap', 'mirror',
             'reflect').
         cval: Value for 'constant' mode outside boundaries.

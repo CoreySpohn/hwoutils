@@ -41,7 +41,7 @@ def shift_image(
     mode: str = "constant",
     cval: float = 0.0,
 ) -> jax.Array:
-    """Shift an image with sub-pixel precision using cubic splines.
+    """Shift an image with sub-pixel precision.
 
     Uses inverse mapping: to shift content by (+dy, +dx), sample from
     (y-dy, x-dx).
@@ -50,7 +50,9 @@ def shift_image(
         image: 2D input image.
         shift_y: Shift in Y direction (pixels). Positive = Down.
         shift_x: Shift in X direction (pixels). Positive = Right.
-        order: Interpolation order (3 = cubic splines).
+        order: Interpolation order passed to ``map_coordinates``. Default
+            is 3, which uses the Keys cubic convolution kernel (see
+            ``docs/interpolation.md``).
         mode: Boundary handling mode.
         cval: Value for 'constant' mode outside boundaries.
 
@@ -63,13 +65,14 @@ def shift_image(
     return map_coordinates(image, coords, order=order, mode=mode, cval=cval)
 
 
-@functools.partial(jax.jit, static_argnames=["shape_tgt"])
+@functools.partial(jax.jit, static_argnames=["shape_tgt", "order"])
 def resample_flux(
     f_src: jax.Array,
     pixscale_src: float,
     pixscale_tgt: float,
     shape_tgt: tuple[int, int],
     rotation_deg: float = 0.0,
+    order: int = 3,
 ) -> jax.Array:
     """Resample an image onto a new grid while conserving total flux.
 
@@ -83,6 +86,11 @@ def resample_flux(
         pixscale_tgt: Pixel scale of target image (same units as src).
         shape_tgt: Target shape (ny_tgt, nx_tgt).
         rotation_deg: CCW rotation angle in degrees.
+        order: Interpolation order passed to ``map_coordinates``. Default
+            is 3, which uses the Keys cubic convolution kernel -- a true
+            interpolant with partition of unity at integer grid spacing
+            that conserves flux on integer downsampling of band-limited
+            inputs. See ``docs/interpolation.md``.
 
     Returns:
         Resampled image with total flux conserved. Shape: (ny_tgt, nx_tgt).
@@ -112,7 +120,7 @@ def resample_flux(
 
     # Interpolate surface brightness
     s_tgt = map_coordinates(
-        s_src, [coords_src[0], coords_src[1]], order=3, mode="constant", cval=0.0
+        s_src, [coords_src[0], coords_src[1]], order=order, mode="constant", cval=0.0
     )
 
     # Back to integrated flux per target pixel
