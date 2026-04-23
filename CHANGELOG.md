@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.1](https://github.com/CoreySpohn/hwoutils/compare/v1.5.0...v1.5.1) (2026-04-23)
+
+
+### Bug Fixes
+
+* **interp:** use Keys cubic convolution for order=3 ([b673b02](https://github.com/CoreySpohn/hwoutils/commit/b673b02d575582a5c47214a1254d5b19a301b83c))
+
 ## [1.5.0](https://github.com/CoreySpohn/hwoutils/compare/v1.4.0...v1.5.0) (2026-04-13)
 
 
