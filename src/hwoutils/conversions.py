@@ -70,6 +70,30 @@ def um_to_nm(length_um):
     return length_um * const.um2nm
 
 
+def nm_to_wavenumber_cm(wavelength_nm):
+    """Convert wavelength [nm] to wavenumber [cm^-1] (nu = 1 / lambda).
+
+    Args:
+        wavelength_nm: Wavelength in nanometers.
+
+    Returns:
+        Wavenumber in inverse centimeters.
+    """
+    return const.cm2nm / wavelength_nm
+
+
+def wavenumber_cm_to_nm(wavenumber_cm):
+    """Convert wavenumber [cm^-1] to wavelength [nm].
+
+    Args:
+        wavenumber_cm: Wavenumber in inverse centimeters.
+
+    Returns:
+        Wavelength in nanometers.
+    """
+    return const.cm2nm / wavenumber_cm
+
+
 def au_to_m(length_au):
     """Convert AU to meters."""
     return length_au * const.AU2m
