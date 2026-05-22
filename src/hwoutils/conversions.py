@@ -327,3 +327,42 @@ def decimal_year_to_jd(decimal_year):
     jd_end = gregorian_to_jd(year + 1, 1, 1)
 
     return jd_start + year_fraction * (jd_end - jd_start)
+
+
+# ---------------------------------------------------------------------------
+# Albedo conventions
+# ---------------------------------------------------------------------------
+
+# Lambertian-sphere ratio of geometric to spherical (Bond) albedo.
+# Seager 2010, eq 3.36: a uniformly Lambertian sphere has A_g = (2/3) A_S.
+SPHERICAL_TO_GEOMETRIC_ALBEDO_LAMBERTIAN: float = 2.0 / 3.0
+
+
+def spherical_to_geometric_albedo(A_S):
+    """Convert spherical albedo to geometric albedo (Lambertian sphere).
+
+    Args:
+        A_S: Spherical (Bond) albedo, dimensionless.
+
+    Returns:
+        Geometric albedo A_g, dimensionless.
+
+    Notes:
+        Exact for a uniformly Lambertian-reflecting sphere
+        (Seager 2010, eq 3.36): A_g = (2/3) * A_S. For atmospheres
+        with anisotropic scattering (Mie clouds, etc.) the actual
+        A_g / A_S ratio depends on the scattering phase function;
+        this is the leading-order approximation that the ExoJaxAtmosphere
+        uses to convert its 2-stream plane-parallel reflectivity to a
+        disk-integrated geometric albedo.
+    """
+    return SPHERICAL_TO_GEOMETRIC_ALBEDO_LAMBERTIAN * A_S
+
+
+def geometric_to_spherical_albedo(A_g):
+    """Convert geometric albedo to spherical albedo (Lambertian sphere).
+
+    Inverse of :func:`spherical_to_geometric_albedo`:
+    A_S = (3/2) * A_g.
+    """
+    return A_g / SPHERICAL_TO_GEOMETRIC_ALBEDO_LAMBERTIAN
