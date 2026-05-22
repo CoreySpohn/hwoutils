@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0](https://github.com/CoreySpohn/hwoutils/compare/v1.5.1...v1.6.0) (2026-05-22)
+
+
+### Features
+
+* Albedo conversion ([4828f28](https://github.com/CoreySpohn/hwoutils/commit/4828f28febae437ffbcd0336918a8dc5ef22322d))
+* New basic conversions ([115dc49](https://github.com/CoreySpohn/hwoutils/commit/115dc4917eb446471ea687a6d59cbba4ca144f53))
+
 ## [1.5.1](https://github.com/CoreySpohn/hwoutils/compare/v1.5.0...v1.5.1) (2026-04-23)
 
 
