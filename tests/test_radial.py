@@ -71,8 +71,8 @@ class TestRadialProfile:
     def test_pixel_scale_scaling(self):
         """Pixel scale should scale the separation axis."""
         image = jnp.ones((32, 32))
-        seps1, _ = radial_profile(image, pixel_scale=1.0, nbins=10)
-        seps2, _ = radial_profile(image, pixel_scale=0.25, nbins=10)
+        seps1, _ = radial_profile(image, pixel_scale_arcsec=1.0, nbins=10)
+        seps2, _ = radial_profile(image, pixel_scale_arcsec=0.25, nbins=10)
         assert jnp.allclose(seps2, seps1 * 0.25, atol=1e-6)
 
     def test_gaussian_decreasing(self):

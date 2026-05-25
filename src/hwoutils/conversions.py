@@ -352,7 +352,7 @@ def spherical_to_geometric_albedo(A_S):
         (Seager 2010, eq 3.36): A_g = (2/3) * A_S. For atmospheres
         with anisotropic scattering (Mie clouds, etc.) the actual
         A_g / A_S ratio depends on the scattering phase function;
-        this is the leading-order approximation that the ExoJaxAtmosphere
+        this is the leading-order approximation that the ExoJaxPhysicalModel
         uses to convert its 2-stream plane-parallel reflectivity to a
         disk-integrated geometric albedo.
     """

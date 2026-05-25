@@ -34,7 +34,7 @@ def radial_distance(
 @jax.jit(static_argnames=["nbins"])
 def radial_profile(
     image: jax.Array,
-    pixel_scale: float = 1.0,
+    pixel_scale_arcsec: float = 1.0,
     center: tuple[float, float] | None = None,
     nbins: int | None = None,
 ) -> tuple[jax.Array, jax.Array]:
@@ -45,7 +45,7 @@ def radial_profile(
 
     Args:
         image: 2D input image.
-        pixel_scale: Conversion factor from pixels to physical units
+        pixel_scale_arcsec: Conversion factor from pixels to physical units
             (e.g. λ/D per pixel). Default 1.0 gives bins in pixels.
         center: Center coordinates (cy, cx). If None, uses geometric center.
         nbins: Number of radial bins. If None, uses ``floor(max_dim / 2)``.
@@ -77,6 +77,6 @@ def radial_profile(
     bin_counts = jnp.zeros(nbins).at[inds - 1].add(1.0)
 
     profile = jnp.where(bin_counts > 0, bin_sums / bin_counts, 0.0)
-    separations = bin_centers * pixel_scale
+    separations = bin_centers * pixel_scale_arcsec
 
     return separations, profile
