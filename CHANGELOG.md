@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.1](https://github.com/CoreySpohn/hwoutils/compare/v1.6.0...v1.6.1) (2026-05-25)
+
+
+### Bug Fixes
+
+* Update naming to match conventions ([75ee546](https://github.com/CoreySpohn/hwoutils/commit/75ee5468287d0dccb3ae95985e541aa68f6a35a6))
+
 ## [1.6.0](https://github.com/CoreySpohn/hwoutils/compare/v1.5.1...v1.6.0) (2026-05-22)
 
 
