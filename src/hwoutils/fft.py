@@ -166,3 +166,84 @@ def fft_shift(image, x=0, y=0):
         image = fft_shift_1d(image, y, axis=0)
 
     return image
+
+
+# ---------------------------------------------------------------------------
+# FFT shears (Fourier-domain building blocks for image rotation)
+# ---------------------------------------------------------------------------
+
+
+def fft_shear_setup(image):
+    """Precompute per-axis Fourier frequencies and center distances for shears.
+
+    The padded grid matches ``fft_shear_x`` / ``fft_shear_y`` (50% zero pad on
+    each side). Compute once and reuse across the three shears of a rotation.
+
+    Args:
+        image: 2D square input image.
+
+    Returns:
+        Tuple ``(x_freqs, x_dists, y_freqs, y_dists)`` for the shear phase ramps.
+    """
+    _, n_pad, _, _ = get_pad_info(image, 1.5)
+    padded = jnp.pad(image, n_pad, mode="constant")
+
+    padded_height, padded_width = padded.shape
+    center_y, center_x = (jnp.array(padded.shape) - 1) / 2
+    grid_y, grid_x = jnp.mgrid[0:padded_height, 0:padded_width]
+
+    x_dists = grid_x - center_x
+    x_freqs = jnp.fft.fftshift(jnp.fft.fftfreq(x_dists.shape[1]))
+    x_freqs = jnp.tile(x_freqs, (x_dists.shape[1], 1)).T
+
+    y_dists = grid_y - center_y
+    y_freqs = jnp.fft.fftshift(jnp.fft.fftfreq(y_dists.shape[0]))
+    y_freqs = jnp.tile(y_freqs, (y_dists.shape[0], 1))
+
+    return x_freqs, x_dists, y_freqs, y_dists
+
+
+def fft_shear_x(image, shear_factor, x_freqs, x_dists):
+    """Shear an image along the x-axis via a Fourier-domain phase ramp.
+
+    Args:
+        image: 2D square input image.
+        shear_factor: Shear coefficient (e.g. ``tan(theta/2)`` for rotation).
+        x_freqs: x frequencies from ``fft_shear_setup``.
+        x_dists: x distances from center from ``fft_shear_setup``.
+
+    Returns:
+        Sheared image, same shape as the input (zero padding removed).
+    """
+    _, n_pad, img_edge, _ = get_pad_info(image, 1.5)
+    padded = jnp.pad(image, n_pad, mode="constant")
+    padded = jnp.fft.fftshift(padded)
+    padded = jnp.fft.fftshift(jnp.fft.fft(padded, axis=1))
+    padded = jnp.exp(-2j * jnp.pi * shear_factor * x_freqs * x_dists) * padded
+    padded = jnp.fft.fftshift(padded)
+    padded = jnp.fft.ifft(padded, axis=1)
+    padded = jnp.fft.fftshift(padded)
+    return jnp.real(padded[n_pad:img_edge, n_pad:img_edge])
+
+
+def fft_shear_y(image, shear_factor, y_freqs, y_dists):
+    """Shear an image along the y-axis via a Fourier-domain phase ramp.
+
+    Args:
+        image: 2D square input image.
+        shear_factor: Shear coefficient (e.g. ``-sin(theta)`` for rotation).
+        y_freqs: y frequencies from ``fft_shear_setup``.
+        y_dists: y distances from center from ``fft_shear_setup``.
+
+    Returns:
+        Sheared image, same shape as the input (zero padding removed).
+    """
+    _, n_pad, img_edge, _ = get_pad_info(image, 1.5)
+    padded = jnp.pad(image, n_pad, mode="constant")
+    padded = jnp.fft.fftshift(padded)
+    padded = jnp.fft.fftshift(jnp.fft.fft(padded, axis=0))
+    padded = jnp.exp(-2j * jnp.pi * shear_factor * y_freqs * y_dists) * padded
+    padded = jnp.fft.fftshift(padded)
+    padded = jnp.fft.ifft(padded, axis=0)
+    padded = jnp.fft.fftshift(padded)
+    return jnp.real(padded[n_pad:img_edge, n_pad:img_edge])

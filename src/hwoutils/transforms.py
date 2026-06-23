@@ -8,7 +8,9 @@ import functools
 
 import jax
 import jax.numpy as jnp
+from jax import lax
 
+from hwoutils.fft import fft_shear_setup, fft_shear_x, fft_shear_y
 from hwoutils.map_coordinates import map_coordinates
 
 
@@ -125,6 +127,82 @@ def resample_flux(
 
     # Back to integrated flux per target pixel
     return s_tgt * (pixscale_tgt**2)
+
+
+def _decompose_angle(angle: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """Split an angle into a (-45, 45] remainder plus a count of 90 deg turns.
+
+    The three-shear Fourier rotation is only well behaved for |angle| <= 45
+    deg, so larger rotations are handled by lossless 90 deg array rotations
+    plus a small residual shear rotation.
+    """
+    angle = angle % 360
+    n_rot = (angle // 90).astype(int)
+    adjusted_angle = angle % 90
+    adjusted_angle, n_rot = lax.cond(
+        adjusted_angle > 45,
+        lambda x: (x - 90, n_rot + 1),
+        lambda x: (x, n_rot),
+        adjusted_angle,
+    )
+    # (315, 360) lands on n_rot == 4; fold it back to 0.
+    n_rot = lax.cond(n_rot == 4, lambda x: 0, lambda x: x, n_rot)
+    return adjusted_angle, n_rot
+
+
+def _rot90_traceable(m: jax.Array, k: jax.Array, axes=(0, 1)) -> jax.Array:
+    """Traceable ``jnp.rot90`` (``k`` may be a tracer)."""
+    k = k % 4
+    branches = [functools.partial(jnp.rot90, m, k=i, axes=axes) for i in range(4)]
+    return lax.switch(k, branches)
+
+
+def _rotate_with_shear(image: jax.Array, rot_deg: jax.Array) -> jax.Array:
+    """Three-shear (x, y, x) Fourier rotation for |rot_deg| <= 45.
+
+    Uses the Fourier-domain shear primitives from :mod:`hwoutils.fft`.
+    """
+    theta = jnp.deg2rad(rot_deg)
+    a = jnp.tan(theta / 2)
+    b = -jnp.sin(theta)
+    x_freqs, x_dists, y_freqs, y_dists = fft_shear_setup(image)
+    image = fft_shear_x(image, a, x_freqs, x_dists)
+    image = fft_shear_y(image, b, y_freqs, y_dists)
+    image = fft_shear_x(image, a, x_freqs, x_dists)
+    return image
+
+
+def rotate_image(image: jax.Array, rotation_deg: float) -> jax.Array:
+    """Rotate a square image about its center with Fourier-domain shears.
+
+    Implements the three-shear rotation of Larkin et al. (1997): a rotation is
+    decomposed into shear-x, shear-y, shear-x, each a phase ramp in the Fourier
+    domain. Unlike interpolation-based rotation this introduces no resampling
+    blur and conserves the band-limited signal, which is why it is the standard
+    choice for de-rotating roll frames in angular differential imaging.
+
+    The image is assumed square. Positive ``rotation_deg`` is counter-clockwise
+    (same convention as :func:`ccw_rotation_matrix`); rotations beyond (-45, 45]
+    are handled by lossless 90 deg turns plus a residual shear rotation.
+
+    Args:
+        image: Source image (2D, square).
+        rotation_deg: Rotation angle in degrees, positive = counter-clockwise.
+
+    Returns:
+        Rotated image, same shape as the input.
+    """
+    # Origin in the lower left rotates clockwise for a positive shear angle, so
+    # negate to make positive == counter-clockwise (matches ccw_rotation_matrix).
+    rot_deg = -rotation_deg
+    rot_deg, n_rot = _decompose_angle(jnp.asarray(rot_deg))
+    image = _rot90_traceable(image, n_rot)
+    return lax.cond(
+        rot_deg != 0.0,
+        lambda x: _rotate_with_shear(image, x),
+        lambda x: image,
+        rot_deg,
+    )
 
 
 # ---------------------------------------------------------------------------

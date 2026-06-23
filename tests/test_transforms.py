@@ -6,7 +6,11 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp  # noqa: E402
 
-from hwoutils.transforms import ccw_rotation_matrix, resample_flux  # noqa: E402
+from hwoutils.transforms import (  # noqa: E402
+    ccw_rotation_matrix,
+    resample_flux,
+    rotate_image,
+)
 
 # =============================================================================
 # Rotation Matrix
@@ -215,3 +219,60 @@ class TestResampleFluxKeys:
         # scale^2 = 1.5625, so a constant 7.5 source becomes
         # 7.5 * 1.5625 = 11.71875 per target pixel.
         assert jnp.allclose(interior, 7.5 * 1.25**2, rtol=1e-10)
+
+
+# =============================================================================
+# FFT Rotation (rotate_image)
+# =============================================================================
+
+
+def _point_image(n, row, col):
+    """Square image with a single unit point source at (row, col)."""
+    return jnp.zeros((n, n)).at[row, col].set(1.0)
+
+
+class TestRotateImage:
+    """Tests for the Fourier three-shear rotate_image."""
+
+    def test_zero_is_identity(self):
+        """0 deg rotation returns the input."""
+        img = _point_image(33, 10, 22)
+        assert jnp.allclose(rotate_image(img, 0.0), img, atol=1e-6)
+
+    def test_360_is_identity(self):
+        """A full turn returns the input."""
+        img = _point_image(33, 10, 22)
+        assert jnp.allclose(rotate_image(img, 360.0), img, atol=1e-5)
+
+    def test_conserves_band_limited_flux(self):
+        """Rotation preserves the flux of a band-limited (Gaussian) source.
+
+        The three-shear method conserves the band-limited signal; a sharp
+        single-pixel delta is not band-limited and rings, so the realistic
+        check uses a smooth blob (as in PSF / ADI use).
+        """
+        n = 64
+        yy, xx = jnp.mgrid[0:n, 0:n]
+        cy, cx = (n - 1) / 2, (n - 1) / 2
+        img = jnp.exp(-(((xx - cx - 6) ** 2 + (yy - cy + 4) ** 2) / (2 * 3.0**2)))
+        rot = rotate_image(img, 37.0)
+        assert jnp.isclose(rot.sum(), img.sum(), rtol=5e-3)
+
+    def test_90_deg_lossless(self):
+        """A 90 deg turn is an exact array rotation (no shear residual)."""
+        n, c = 33, 16
+        img = _point_image(n, c, c + 5)  # 5 px right of center
+        rot = rotate_image(img, 90.0)
+        iy, ix = jnp.unravel_index(jnp.argmax(rot), rot.shape)
+        # +90 CCW (image convention here) sends offset (0, +5) -> (+5, 0)
+        assert (int(iy), int(ix)) == (c + 5, c)
+        # the rotated point is recovered cleanly (a single bright pixel)
+        assert jnp.isclose(rot.max(), 1.0, atol=1e-3)
+
+    def test_180_inverts_through_center(self):
+        """180 deg maps an offset (dr, dc) to (-dr, -dc)."""
+        n, c = 33, 16
+        img = _point_image(n, c - 3, c + 5)
+        rot = rotate_image(img, 180.0)
+        iy, ix = jnp.unravel_index(jnp.argmax(rot), rot.shape)
+        assert (int(iy), int(ix)) == (c + 3, c - 5)
