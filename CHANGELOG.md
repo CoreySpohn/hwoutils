@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.7.0](https://github.com/CoreySpohn/hwoutils/compare/v1.6.1...v1.7.0) (2026-06-23)
+
+
+### Features
+
+* Add rotate_image fft function ([0a9c48e](https://github.com/CoreySpohn/hwoutils/commit/0a9c48e572084fed8998244e50c692d9778d9c7f))
+* Add Zenodo info ([542caa0](https://github.com/CoreySpohn/hwoutils/commit/542caa058e273532459db5d074d179e666c75700))
+
 ## [1.6.1](https://github.com/CoreySpohn/hwoutils/compare/v1.6.0...v1.6.1) (2026-05-25)
 
 
