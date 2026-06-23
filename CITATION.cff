@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: hwoutils
+abstract: "hwoutils is an open-source library of shared JAX-based utilities, the constants, unit conversions, and image transforms, for the Habitable Worlds Observatory direct imaging simulation suite."
+authors:
+  - family-names: Spohn
+    given-names: Corey
+    orcid: "https://orcid.org/0000-0002-3138-0240"
+    affiliation: "NASA Goddard Space Flight Center"
+repository-code: "https://github.com/CoreySpohn/hwoutils"
+license: MIT
+doi: "10.5281/zenodo.20819387"
