@@ -34,7 +34,7 @@ WORKSPACE_REPOS = [
     "yieldplotlib",
     "hwostyle",
     "exosims-plugins",
-    "hwo-mission-control",
+    "hwo-mission-control",  # internal-ref-ok
     "eacy",
     "pyEDITH",
     "EXOSIMS",
