@@ -193,3 +193,24 @@ class TestMassConversions:
     def test_mearth_to_kg(self):
         """1 Mearth ≈ 5.972e24 kg."""
         assert jnp.isclose(conv.Mearth_to_kg(1.0), const.Mearth2kg, rtol=1e-3)
+
+
+# =============================================================================
+# AB Magnitude <-> Jansky Conversions
+# =============================================================================
+
+
+def test_ab_mag_zero_point():
+    """mag_to_flux_jy(0) equals the astropy-exact AB zero point in Jy."""
+    from hwoutils.conversions import AB_ZERO_POINT_JY, mag_to_flux_jy
+
+    assert abs(float(mag_to_flux_jy(0.0)) - AB_ZERO_POINT_JY) < 1e-9
+    assert abs(AB_ZERO_POINT_JY - 3630.7805477010028) < 1e-9
+
+
+def test_ab_mag_jy_round_trip():
+    """flux_jy_to_mag inverts mag_to_flux_jy across a range of magnitudes."""
+    from hwoutils.conversions import flux_jy_to_mag, mag_to_flux_jy
+
+    for m in [0.0, 10.0, 22.0, 30.0]:
+        assert abs(float(flux_jy_to_mag(mag_to_flux_jy(m))) - m) < 1e-12

@@ -39,6 +39,22 @@ def photons_per_nm_per_m2_to_jy(flux_phot, wavelength_nm):
     return flux_phot * (wavelength_nm * const.h) / const.Jy
 
 
+# AB zero point: astropy's exact 10**(-0.4 * 48.60) erg/s/cm^2/Hz in Jy,
+# not the rounded nominal 3631 Jy. Keeps these helpers bit-consistent with
+# astropy's ABmag.to(u.Jy) (cross-validated in test_astropy_crossval).
+AB_ZERO_POINT_JY = 3630.7805477010028
+
+
+def mag_to_flux_jy(mag):
+    """AB magnitude to flux density in Jansky."""
+    return AB_ZERO_POINT_JY * 10.0 ** (-0.4 * mag)
+
+
+def flux_jy_to_mag(flux_jy):
+    """Flux density in Jansky to AB magnitude."""
+    return -2.5 * jnp.log10(flux_jy / AB_ZERO_POINT_JY)
+
+
 def mag_per_arcsec2_to_jy_per_arcsec2(mag_per_arcsec2):
     """Convert surface brightness from mag/arcsec² to Jy/arcsec² (AB).
 
@@ -48,11 +64,7 @@ def mag_per_arcsec2_to_jy_per_arcsec2(mag_per_arcsec2):
     Returns:
         Surface brightness in Jy/arcsec².
     """
-    # Astropy calculates `to(u.Jy)` as `10**( -0.4 * (mag + 48.600000) )`
-    # and `1 Jy = 1e-23 erg/s/cm^2/Hz`
-    # which comes out to 3630.7805477010028 Jy, not the nominal 3631.0 Jy.
-    f0_jy = 3630.7805477010028
-    return f0_jy * 10 ** (-0.4 * mag_per_arcsec2)
+    return mag_to_flux_jy(mag_per_arcsec2)
 
 
 # ---------------------------------------------------------------------------
