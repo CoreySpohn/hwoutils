@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.0](https://github.com/CoreySpohn/hwoutils/compare/v1.8.0...v1.9.0) (2026-07-10)
+
+
+### Features
+
+* **conversions:** AB mag &lt;-&gt; Jy helpers (astropy-exact zero point; canonical home for orbix/skyscapes/jaxedith) ([b11640e](https://github.com/CoreySpohn/hwoutils/commit/b11640ebef5078317d058421018a7173980a3253))
+
 ## [1.8.0](https://github.com/CoreySpohn/hwoutils/compare/v1.7.0...v1.8.0) (2026-06-23)
 
 
