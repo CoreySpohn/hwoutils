@@ -1,7 +1,7 @@
 """Image transformation utilities.
 
-Flux-conserving resampling and sub-pixel image operations. All functions
-are JIT-compilable and differentiable.
+Area-scaled interpolation, conservative pixel rebinning, and Fourier rotation.
+JAX derivatives describe the chosen reconstruction and its piecewise boundaries.
 """
 
 import functools
@@ -76,57 +76,82 @@ def resample_flux(
     rotation_deg: float = 0.0,
     order: int = 3,
 ) -> jax.Array:
-    """Resample an image onto a new grid while conserving total flux.
+    """Interpolate at target pixel centers and apply the pixel-area ratio.
 
-    Performs an affine transformation (rotation and scaling) to map
-    the source image onto a target grid. Converts to surface brightness,
-    interpolates, then converts back to integrated flux per pixel.
+    This is a center-sampling approximation to integrated target-pixel flux,
+    not a conservative pixel integrator or an antialiasing filter. Use
+    ``rebin_flux`` for conservative, axis-aligned pixel overlap integration.
 
     Args:
-        f_src: Source image (2D) with integrated flux per pixel.
-        pixscale_src: Pixel scale of source image.
-        pixscale_tgt: Pixel scale of target image (same units as src).
-        shape_tgt: Target shape (ny_tgt, nx_tgt).
-        rotation_deg: CCW rotation angle in degrees.
-        order: Interpolation order passed to ``map_coordinates``. Default
-            is 3, which uses the Keys cubic convolution kernel -- a true
-            interpolant with partition of unity at integer grid spacing
-            that conserves flux on integer downsampling of band-limited
-            inputs. See ``docs/interpolation.md``.
+        f_src: Source image (2D), interpreted as flux per source pixel.
+        pixscale_src: Source pixel scale.
+        pixscale_tgt: Target pixel scale, in the same units.
+        shape_tgt: Target shape (ny, nx).
+        rotation_deg: CCW rotation in degrees with the origin at lower left.
+        order: Interpolation order: 0, 1, or 3 (Keys cubic convolution).
 
     Returns:
-        Resampled image with total flux conserved. Shape: (ny_tgt, nx_tgt).
+        Interpolated image multiplied by the target/source pixel-area ratio.
+        The grids share their geometric centers. Outside samples are zero;
+        cropping, undersampling, and reconstruction can change total flux.
     """
     ny_src, nx_src = f_src.shape
     ny_tgt, nx_tgt = shape_tgt
-
-    # Surface brightness (flux per unit area)
-    s_src = f_src / (pixscale_src**2)
-
-    # Affine matrix (TARGET pixel centres -> SOURCE coordinates)
     scale = pixscale_tgt / pixscale_src
-    a_mat = ccw_rotation_matrix(rotation_deg) * scale
+    theta = jnp.deg2rad(rotation_deg)
+    cosine, sine = jnp.cos(theta), jnp.sin(theta)
+    y = (jnp.arange(ny_tgt) - (ny_tgt - 1) / 2)[:, None] * scale
+    x = (jnp.arange(nx_tgt) - (nx_tgt - 1) / 2)[None, :] * scale
+    coords = [
+        cosine * y - sine * x + (ny_src - 1) / 2,
+        sine * y + cosine * x + (nx_src - 1) / 2,
+    ]
+    # Promote integer pixel fluxes before interpolation, avoiding output rounding.
+    source = jnp.asarray(f_src, dtype=jnp.result_type(f_src, 1.0))
+    return map_coordinates(source, coords, order=order) * scale**2
 
-    c_src = jnp.array([(ny_src - 1) / 2.0, (nx_src - 1) / 2.0])
-    c_tgt = jnp.array([(ny_tgt - 1) / 2.0, (nx_tgt - 1) / 2.0])
-    offset = c_src - a_mat @ c_tgt
 
-    # Grid of TARGET pixel centres
-    y_coords = jnp.arange(ny_tgt)
-    x_coords = jnp.arange(nx_tgt)
-    y_tgt, x_tgt = jnp.meshgrid(y_coords, x_coords, indexing="ij")
+@functools.partial(jax.jit, static_argnames=["shape_tgt"])
+def rebin_flux(
+    f_src: jax.Array,
+    pixscale_src: float,
+    pixscale_tgt: float,
+    shape_tgt: tuple[int, int],
+) -> jax.Array:
+    """Integrate overlaps between centered, axis-aligned square pixel grids.
 
-    # (2, ny_tgt, nx_tgt)
-    coords = jnp.stack([y_tgt, x_tgt], axis=0)
-    coords_src = (a_mat @ coords.reshape(2, -1) + offset[:, None]).reshape(coords.shape)
+    Each source pixel is modeled as uniform surface brightness over its area.
+    Flux is conserved to floating-point precision when the target footprint
+    contains the source footprint. Partial coverage loses only the uncovered
+    flux. This model preserves positivity but does not recover sub-pixel PSF
+    structure or provide an ideal frequency-domain antialiasing filter.
 
-    # Interpolate surface brightness
-    s_tgt = map_coordinates(
-        s_src, [coords_src[0], coords_src[1]], order=order, mode="constant", cval=0.0
-    )
+    Args:
+        f_src: 2D integrated source-pixel flux, real or complex.
+        pixscale_src: Positive source pixel scale.
+        pixscale_tgt: Positive target pixel scale in the same units.
+        shape_tgt: Positive target dimensions (ny, nx).
 
-    # Back to integrated flux per target pixel
-    return s_tgt * (pixscale_tgt**2)
+    Returns:
+        Integrated flux per target pixel. The geometric centers coincide.
+        Derivatives with respect to scales are piecewise defined at pixel edges.
+    """
+    if f_src.ndim != 2 or len(shape_tgt) != 2 or min(*f_src.shape, *shape_tgt) <= 0:
+        raise ValueError("rebin_flux requires nonempty 2D grids")
+    scale = pixscale_tgt / pixscale_src
+    dtype = jnp.result_type(f_src.real.dtype, pixscale_src, pixscale_tgt, 1.0)
+
+    def overlaps(n_src, n_tgt):
+        source_edges = jnp.arange(n_src + 1, dtype=dtype) - n_src / 2
+        target_edges = (jnp.arange(n_tgt + 1, dtype=dtype) - n_tgt / 2) * scale
+        left = jnp.maximum(target_edges[:-1, None], source_edges[None, :-1])
+        right = jnp.minimum(target_edges[1:, None], source_edges[None, 1:])
+        return jnp.maximum(right - left, 0)
+
+    wy = overlaps(f_src.shape[0], shape_tgt[0])
+    wx = overlaps(f_src.shape[1], shape_tgt[1])
+    source = jnp.asarray(f_src, dtype=jnp.result_type(f_src, 1.0))
+    return wy @ source @ wx.T
 
 
 def _decompose_angle(angle: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -157,52 +182,89 @@ def _rot90_traceable(m: jax.Array, k: jax.Array, axes=(0, 1)) -> jax.Array:
     return lax.switch(k, branches)
 
 
-def _rotate_with_shear(image: jax.Array, rot_deg: jax.Array) -> jax.Array:
-    """Three-shear (x, y, x) Fourier rotation for |rot_deg| <= 45.
-
-    Uses the Fourier-domain shear primitives from :mod:`hwoutils.fft`.
-    """
+def _rotate_with_shear(image, rot_deg, pad_factor=0.5, translation=None):
+    """Rotate a residual angle on one padded grid, then crop only once."""
+    if pad_factor < 0:
+        raise ValueError("pad_factor must be nonnegative")
+    n = image.shape[0]
+    pad = int(pad_factor * n)
+    padded = jnp.pad(image, pad)
     theta = jnp.deg2rad(rot_deg)
-    a = jnp.tan(theta / 2)
-    b = -jnp.sin(theta)
-    x_freqs, x_dists, y_freqs, y_dists = fft_shear_setup(image)
-    image = fft_shear_x(image, a, x_freqs, x_dists)
-    image = fft_shear_y(image, b, y_freqs, y_dists)
-    image = fft_shear_x(image, a, x_freqs, x_dists)
-    return image
+    a, b = jnp.tan(theta / 2), -jnp.sin(theta)
+    fx, dy, fy, dx = fft_shear_setup(padded, pad_factor=0.0)
+    padded = fft_shear_x(padded, a, fx, dy, pad_factor=0.0)
+    padded = fft_shear_y(padded, b, fy, dx, pad_factor=0.0)
+    padded = fft_shear_x(padded, a, fx, dy, pad_factor=0.0)
+    if translation is not None:
+        # Move the rotation origin without interpolating/cropping the source first.
+        for axis, frequency, shift in (
+            (1, fx, translation[1]),
+            (0, fy, translation[0]),
+        ):
+            spectrum = jnp.fft.fft(padded, axis=axis)
+            padded = jnp.fft.ifft(
+                spectrum * jnp.exp(-2j * jnp.pi * frequency * shift), axis=axis
+            )
+            if not jnp.iscomplexobj(image):
+                padded = padded.real
+    return padded[pad : pad + n, pad : pad + n]
 
 
-def rotate_image(image: jax.Array, rotation_deg: float) -> jax.Array:
-    """Rotate a square image about its center with Fourier-domain shears.
+@functools.partial(jax.jit, static_argnames=["pad_factor"])
+def rotate_image(
+    image: jax.Array,
+    rotation_deg: float,
+    *,
+    pad_factor: float = 0.5,
+    center: tuple[float, float] | None = None,
+) -> jax.Array:
+    """Rotate a square image using three Fourier shears on a padded grid.
 
-    Implements the three-shear rotation of Larkin et al. (1997): a rotation is
-    decomposed into shear-x, shear-y, shear-x, each a phase ramp in the Fourier
-    domain. Unlike interpolation-based rotation this introduces no resampling
-    blur and conserves the band-limited signal, which is why it is the standard
-    choice for de-rotating roll frames in angular differential imaging.
+    Positive angles are CCW when displayed with ``origin="lower"``. Right-angle
+    array turns reduce the shear angle to (-45, 45]. The residual path is also
+    evaluated at zero to retain the angle derivative; identity and right-angle
+    outputs therefore agree to FFT roundoff rather than necessarily bitwise.
 
-    The image is assumed square. Positive ``rotation_deg`` is counter-clockwise
-    (same convention as :func:`ccw_rotation_matrix`); rotations beyond (-45, 45]
-    are handled by lossless 90 deg turns plus a residual shear rotation.
+    Real images remain real after each shear. On even FFT grids this chooses
+    the real cosine interpolant for the Nyquist mode, whose amplitude can
+    decrease under fractional shifts. Rotation is not exactly unitary for
+    arbitrary sampled images, and cropping can lose flux. No positivity clamp
+    or flux renormalization is applied.
 
     Args:
-        image: Source image (2D, square).
-        rotation_deg: Rotation angle in degrees, positive = counter-clockwise.
+        image: Nonempty square 2D image, real or complex.
+        rotation_deg: Counter-clockwise rotation angle in degrees.
+        pad_factor: Static, nonnegative padding per side as a fraction of N.
+            Default 0.5 gives width 2N (2N-1 for odd N). Set 1.5 for approximately
+            4N. Tight crops, edge content, and precision PSF wings need a padding
+            convergence check; padding does not remove sampling aliasing.
+        center: Rotation origin (row, column) in input pixel coordinates.
+            Default is the geometric center ((N-1)/2, (N-1)/2). Specify the FITS
+            optical center explicitly when it differs. Nondefault centers may
+            require more padding to contain the shifted intermediate image.
 
     Returns:
-        Rotated image, same shape as the input.
+        Rotated image with the input shape. Angle derivatives are local to the
+        selected shear decomposition; sampled images can differ at its seams.
     """
-    # Origin in the lower left rotates clockwise for a positive shear angle, so
-    # negate to make positive == counter-clockwise (matches ccw_rotation_matrix).
-    rot_deg = -rotation_deg
-    rot_deg, n_rot = _decompose_angle(jnp.asarray(rot_deg))
+    image = jnp.asarray(image)
+    if image.ndim != 2 or image.shape[0] != image.shape[1] or not image.shape[0]:
+        raise ValueError("rotate_image requires a nonempty square image")
+    translation = None
+    if center is not None:
+        center = jnp.asarray(center)
+        if center.shape != (2,):
+            raise ValueError("center must contain (row, column)")
+        cy, cx = jnp.asarray(center) - (image.shape[0] - 1) / 2
+        theta = jnp.deg2rad(rotation_deg)
+        cosine, sine = jnp.cos(theta), jnp.sin(theta)
+        translation = (
+            cy - (sine * cx + cosine * cy),
+            cx - (cosine * cx - sine * cy),
+        )
+    rot_deg, n_rot = _decompose_angle(-jnp.asarray(rotation_deg))
     image = _rot90_traceable(image, n_rot)
-    return lax.cond(
-        rot_deg != 0.0,
-        lambda x: _rotate_with_shear(image, x),
-        lambda x: image,
-        rot_deg,
-    )
+    return _rotate_with_shear(image, rot_deg, pad_factor, translation)
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +277,10 @@ def downsample_psf(
     src_pixscale: float,
     target_shape: tuple[int, int],
 ) -> tuple[jax.Array, float]:
-    """Downsample a PSF to target shape while conserving total flux.
+    """Integrate a PSF onto a coarser grid with the same field of view.
+
+    Aligned integer reductions sum blocks exactly. Other ratios integrate a
+    piecewise-constant source-pixel model via ``rebin_flux``.
 
     Args:
         psf: The source PSF image (2D array).
@@ -226,20 +291,21 @@ def downsample_psf(
     Returns:
         Tuple of (resampled_psf, new_pixscale).
     """
-    ny_src = psf.shape[0]
-    ny_tgt = target_shape[0]
-
-    scale_factor = ny_src / ny_tgt
-    tgt_pixscale = src_pixscale * scale_factor
-
-    resampled = resample_flux(
-        psf,
-        src_pixscale,
-        tgt_pixscale,
-        target_shape,
-        rotation_deg=0.0,
-    )
-
+    if psf.ndim != 2 or len(target_shape) != 2 or min(*psf.shape, *target_shape) <= 0:
+        raise ValueError("downsample_psf requires nonempty 2D grids")
+    ny, nx = psf.shape
+    ty, tx = target_shape
+    if ny * tx != nx * ty:
+        raise ValueError("target_shape must preserve the source aspect ratio")
+    if ty > ny or tx > nx:
+        raise ValueError("target_shape must not exceed the source shape")
+    tgt_pixscale = src_pixscale * (ny / ty)
+    if ny % ty == 0 and nx % tx == 0:
+        # Aligned detector bins integrate by summation, with no reconstruction.
+        source = jnp.asarray(psf, dtype=jnp.result_type(psf, 1.0))
+        resampled = source.reshape(ty, ny // ty, tx, nx // tx).sum(axis=(1, 3))
+    else:
+        resampled = rebin_flux(psf, src_pixscale, tgt_pixscale, target_shape)
     return resampled, tgt_pixscale
 
 
@@ -258,18 +324,10 @@ def downsample_psfs(
     Returns:
         Tuple of (resampled_psfs, new_pixscale).
     """
-    ny_tgt = target_shape[0]
-    scale_factor = psfs.shape[1] / ny_tgt
-    tgt_pixscale = src_pixscale * scale_factor
-
-    def resample_single(psf):
-        return resample_flux(
-            psf,
-            src_pixscale,
-            tgt_pixscale,
-            target_shape,
-            rotation_deg=0.0,
-        )
-
-    resample_batch = jax.vmap(resample_single)
-    return resample_batch(psfs), tgt_pixscale
+    if psfs.ndim != 3:
+        raise ValueError("downsample_psfs requires a stack with shape (N, H, W)")
+    resampled, scales = jax.vmap(
+        lambda psf: downsample_psf(psf, src_pixscale, target_shape),
+        out_axes=(0, None),
+    )(psfs)
+    return resampled, scales

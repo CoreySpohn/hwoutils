@@ -22,7 +22,8 @@ def get_pad_info(image, pad_factor):
 
     Args:
         image: 2D input image (JAX or NumPy array).
-        pad_factor: Factor by which to pad (e.g. 1.5 gives 50% on each side).
+        pad_factor: Padding on each side as a fraction of the input height.
+            For example, 1.5 adds 150% per side, giving width 4N for even N.
 
     Returns:
         Tuple of (n_pixels_orig, n_pad, img_edge, n_pixels_final).
@@ -30,7 +31,7 @@ def get_pad_info(image, pad_factor):
     n_pixels_orig = image.shape[0]
     n_pad = int(pad_factor * n_pixels_orig)
     img_edge = n_pad + n_pixels_orig
-    n_pixels_final = int(2 * n_pixels_orig * pad_factor + n_pixels_orig)
+    n_pixels_final = n_pixels_orig + 2 * n_pad
     return n_pixels_orig, n_pad, img_edge, n_pixels_final
 
 
@@ -124,12 +125,10 @@ def fft_shift_1d(image, shift_pixels, axis):
     """
     n_pixels = image.shape[0]
     n_pad = int(1.5 * n_pixels)
-    img_edge = n_pad + n_pixels
-
     padded = np.pad(image, n_pad, mode="constant")
     padded = np.fft.fft(padded, axis=axis)
 
-    freqs = np.fft.fftfreq(4 * n_pixels)
+    freqs = np.fft.fftfreq(padded.shape[axis])
     phasor = np.exp(-2j * np.pi * freqs * shift_pixels)
 
     if axis == 1:
@@ -139,7 +138,7 @@ def fft_shift_1d(image, shift_pixels, axis):
 
     padded = padded * phasor
     padded = np.real(np.fft.ifft(padded, axis=axis))
-    return padded[n_pad:img_edge, n_pad:img_edge]
+    return padded[n_pad : n_pad + image.shape[0], n_pad : n_pad + image.shape[1]]
 
 
 def fft_shift(image, x=0, y=0):
@@ -173,77 +172,77 @@ def fft_shift(image, x=0, y=0):
 # ---------------------------------------------------------------------------
 
 
-def fft_shear_setup(image):
+def fft_shear_setup(image, pad_factor=1.5):
     """Precompute per-axis Fourier frequencies and center distances for shears.
 
-    The padded grid matches ``fft_shear_x`` / ``fft_shear_y`` (50% zero pad on
-    each side). Compute once and reuse across the three shears of a rotation.
+    Frequencies use native FFT ordering. A horizontal shear pairs column
+    frequencies with row distances; a vertical shear uses the converse.
 
     Args:
-        image: 2D square input image.
+        image: 2D input image.
+        pad_factor: Padding per side as a fraction of input height. Use the
+            same value in the shear calls; zero operates on an already padded
+            array without cropping intermediate results.
 
     Returns:
         Tuple ``(x_freqs, x_dists, y_freqs, y_dists)`` for the shear phase ramps.
     """
-    _, n_pad, _, _ = get_pad_info(image, 1.5)
-    padded = jnp.pad(image, n_pad, mode="constant")
-
-    padded_height, padded_width = padded.shape
-    center_y, center_x = (jnp.array(padded.shape) - 1) / 2
-    grid_y, grid_x = jnp.mgrid[0:padded_height, 0:padded_width]
-
-    x_dists = grid_x - center_x
-    x_freqs = jnp.fft.fftshift(jnp.fft.fftfreq(x_dists.shape[1]))
-    x_freqs = jnp.tile(x_freqs, (x_dists.shape[1], 1)).T
-
-    y_dists = grid_y - center_y
-    y_freqs = jnp.fft.fftshift(jnp.fft.fftfreq(y_dists.shape[0]))
-    y_freqs = jnp.tile(y_freqs, (y_dists.shape[0], 1))
-
+    if pad_factor < 0:
+        raise ValueError("pad_factor must be nonnegative")
+    _, n_pad, _, _ = get_pad_info(image, pad_factor)
+    ny, nx = (size + 2 * n_pad for size in image.shape)
+    dtype = jnp.result_type(image.real.dtype, jnp.float32)
+    x_freqs = jnp.fft.fftfreq(nx, dtype=dtype)[None, :]
+    x_dists = (jnp.arange(ny, dtype=dtype) - (ny - 1) / 2)[:, None]
+    y_freqs = jnp.fft.fftfreq(ny, dtype=dtype)[:, None]
+    y_dists = (jnp.arange(nx, dtype=dtype) - (nx - 1) / 2)[None, :]
     return x_freqs, x_dists, y_freqs, y_dists
 
 
-def fft_shear_x(image, shear_factor, x_freqs, x_dists):
+def fft_shear_x(image, shear_factor, x_freqs, x_dists, pad_factor=1.5):
     """Shear an image along the x-axis via a Fourier-domain phase ramp.
 
     Args:
-        image: 2D square input image.
+        image: 2D input image.
         shear_factor: Shear coefficient (e.g. ``tan(theta/2)`` for rotation).
         x_freqs: x frequencies from ``fft_shear_setup``.
-        x_dists: x distances from center from ``fft_shear_setup``.
+        x_dists: Row distances from center from ``fft_shear_setup``.
+        pad_factor: Padding fraction per side, matching ``fft_shear_setup``.
 
     Returns:
-        Sheared image, same shape as the input (zero padding removed).
+        Sheared image, same shape as input. For real input the real part is
+        taken after inversion, choosing the cosine interpolant at the even
+        grid's Nyquist frequency. Complex input retains its imaginary part.
     """
-    _, n_pad, img_edge, _ = get_pad_info(image, 1.5)
+    _, n_pad, _, _ = get_pad_info(image, pad_factor)
     padded = jnp.pad(image, n_pad, mode="constant")
-    padded = jnp.fft.fftshift(padded)
-    padded = jnp.fft.fftshift(jnp.fft.fft(padded, axis=1))
+    padded = jnp.fft.fft(padded, axis=1)
     padded = jnp.exp(-2j * jnp.pi * shear_factor * x_freqs * x_dists) * padded
-    padded = jnp.fft.fftshift(padded)
     padded = jnp.fft.ifft(padded, axis=1)
-    padded = jnp.fft.fftshift(padded)
-    return jnp.real(padded[n_pad:img_edge, n_pad:img_edge])
+    if not jnp.iscomplexobj(image):
+        padded = padded.real
+    return padded[n_pad : n_pad + image.shape[0], n_pad : n_pad + image.shape[1]]
 
 
-def fft_shear_y(image, shear_factor, y_freqs, y_dists):
+def fft_shear_y(image, shear_factor, y_freqs, y_dists, pad_factor=1.5):
     """Shear an image along the y-axis via a Fourier-domain phase ramp.
 
     Args:
-        image: 2D square input image.
+        image: 2D input image.
         shear_factor: Shear coefficient (e.g. ``-sin(theta)`` for rotation).
         y_freqs: y frequencies from ``fft_shear_setup``.
-        y_dists: y distances from center from ``fft_shear_setup``.
+        y_dists: Column distances from center from ``fft_shear_setup``.
+        pad_factor: Padding fraction per side, matching ``fft_shear_setup``.
 
     Returns:
-        Sheared image, same shape as the input (zero padding removed).
+        Sheared image, same shape as input. Real input uses the same Nyquist
+        cosine convention as ``fft_shear_x``.
     """
-    _, n_pad, img_edge, _ = get_pad_info(image, 1.5)
+    _, n_pad, _, _ = get_pad_info(image, pad_factor)
     padded = jnp.pad(image, n_pad, mode="constant")
-    padded = jnp.fft.fftshift(padded)
-    padded = jnp.fft.fftshift(jnp.fft.fft(padded, axis=0))
+    padded = jnp.fft.fft(padded, axis=0)
     padded = jnp.exp(-2j * jnp.pi * shear_factor * y_freqs * y_dists) * padded
-    padded = jnp.fft.fftshift(padded)
     padded = jnp.fft.ifft(padded, axis=0)
-    padded = jnp.fft.fftshift(padded)
-    return jnp.real(padded[n_pad:img_edge, n_pad:img_edge])
+    if not jnp.iscomplexobj(image):
+        padded = padded.real
+    return padded[n_pad : n_pad + image.shape[0], n_pad : n_pad + image.shape[1]]

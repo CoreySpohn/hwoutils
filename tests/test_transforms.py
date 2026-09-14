@@ -71,14 +71,14 @@ class TestResampleFlux:
     def test_same_scale_identity(self):
         """Same pixel scale and shape should preserve interior pixels.
 
-        Edge pixels are slightly attenuated by the cubic spline boundary
-        effect (4-point stencil extends beyond image with mode=constant).
+        Keys interpolation reproduces integer-coordinate samples exactly,
+        including boundary samples.
         """
         f_src = jnp.ones((64, 64)) * 100.0
         f_tgt = resample_flux(f_src, 0.01, 0.01, (64, 64), 0.0)
         # Interior pixels (away from boundary stencil) are exact
         assert jnp.allclose(f_tgt[2:-2, 2:-2], f_src[2:-2, 2:-2], rtol=0.01)
-        # Total flux should still be close (only edge attenuation)
+        # The identity also preserves the total flux.
         assert jnp.isclose(jnp.sum(f_tgt), jnp.sum(f_src), rtol=0.05)
 
     def test_point_source_downsampling(self):
@@ -146,21 +146,17 @@ class TestResampleFlux:
 
 
 class TestResampleFluxKeys:
-    """Tight flux-conservation tests for the Keys cubic kernel.
+    """Photometric checks for these particular smooth, well-sampled inputs.
 
-    Keys has partition of unity at integer grid spacing, so downsampling
-    by an integer factor with a compact, band-limited input should
-    conserve total flux well below the loose 5% tolerance used by the
-    generic flux-conservation tests above.
+    These examples do not establish conservation for arbitrary images or
+    arbitrary scale ratios; conservative reduction is tested separately.
     """
 
     def test_compact_gaussian_integer_downsample(self):
         """Compact Gaussian, 2x integer downsample: <1% flux error.
 
-        Partition of unity gives exact conservation of flux contributions
-        from interior source pixels; the remaining error is from the
-        Gaussian's tails leaking into the 2-pixel boundary strip where
-        the Keys stencil reaches the cval=0 padding.
+        This broad source has little structure on the target pixel scale.
+        The test bounds this example's sampling and boundary errors.
         """
         N = 128
         x = jnp.linspace(-4, 4, N)
@@ -176,8 +172,8 @@ class TestResampleFluxKeys:
     def test_compact_gaussian_flux_scale_3(self):
         """Compact Gaussian, 3x downsample: <1% flux error.
 
-        Scale=3 has the target grid at source-coord offsets {0, 3, 6,
-        ...}, still integer spacing so POU holds.
+        This verifies the error for a broad Gaussian, not a general
+        partition-of-unity argument for conservative downsampling.
         """
         N = 192
         x = jnp.linspace(-5, 5, N)
@@ -196,8 +192,7 @@ class TestResampleFluxKeys:
         At scale=1 with zero rotation, every target center coincides
         with a source pixel center. Keys at integer offset is exactly
         the sample value (K(0) = 1, K(+/-k) = 0 for k in {1, 2}).
-        Boundary pixels within 2 of the edge are still attenuated by
-        the cval=0 padding.
+        Integer coordinates also reproduce boundary samples exactly.
         """
         f_src = jnp.ones((64, 64)) * 42.0
         f_tgt = resample_flux(f_src, 0.01, 0.01, (64, 64), 0.0)

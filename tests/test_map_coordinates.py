@@ -78,8 +78,8 @@ class TestInterpolationOrders:
 
         For any real offset t in [0, 1), the 4 Keys weights
         {K(t+1), K(t), K(t-1), K(t-2)} must sum to 1. This is the
-        partition-of-unity property that makes Keys flux-preserving on
-        integer-spaced grids.
+        partition-of-unity property that reproduces constant fields; it
+        does not establish conservative downsampling.
         """
         f = jnp.ones((8, 8), dtype=jnp.float64)
         # Interior coords (stencil fully inside the array)
