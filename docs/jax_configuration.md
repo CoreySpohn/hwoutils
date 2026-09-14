@@ -25,16 +25,19 @@ enable_x64()
 set_platform("cpu")
 
 import jax.numpy as jnp  # safe: config is already set
-x = jnp.ones(10)         # uses float64 on CPU
+
+x = jnp.ones(10)  # uses float64 on CPU
 ```
 
 ```python
 # WRONG -- too late, JAX already initialized
 import jax.numpy as jnp
-x = jnp.ones(10)          # triggers backend init with float32
+
+x = jnp.ones(10)  # triggers backend init with float32
 
 from hwoutils import enable_x64
-enable_x64()               # may be silently ignored!
+
+enable_x64()  # may be silently ignored!
 ```
 
 > [!CAUTION]
@@ -68,8 +71,8 @@ Switches JAX from 32-bit (default) to 64-bit floating-point precision.
 ```python
 from hwoutils import enable_x64
 
-enable_x64()        # enable float64
-enable_x64(False)   # revert to float32 (or read JAX_ENABLE_X64 env var)
+enable_x64()  # enable float64
+enable_x64(False)  # revert to float32 (or read JAX_ENABLE_X64 env var)
 ```
 
 ### The `jax.enable_x64()` context manager (JAX >= 0.8.0)
@@ -115,9 +118,9 @@ Selects the compute backend (CPU, GPU, or TPU).
 ```python
 from hwoutils import set_platform
 
-set_platform("cpu")   # force CPU even if GPU is available
-set_platform("gpu")   # use GPU
-set_platform()        # read JAX_PLATFORMS env var, default "cpu"
+set_platform("cpu")  # force CPU even if GPU is available
+set_platform("gpu")  # use GPU
+set_platform()  # read JAX_PLATFORMS env var, default "cpu"
 ```
 
 > [!IMPORTANT]
