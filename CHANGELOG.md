@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.10.0](https://github.com/CoreySpohn/hwoutils/compare/v1.9.0...v1.10.0) (2026-09-14)
+
+
+### Features
+
+* **transforms:** add conservative rebin_flux and correct rotation/interpolation edge cases ([c106f3e](https://github.com/CoreySpohn/hwoutils/commit/c106f3e24bf39f22af1aea0f43503f4a0dc8a260))
+
 ## [1.9.0](https://github.com/CoreySpohn/hwoutils/compare/v1.8.0...v1.9.0) (2026-07-10)
 
 
