@@ -54,8 +54,7 @@ Use `rebin_flux` for conservative axis-aligned changes of pixel grid:
 ```python
 from hwoutils.transforms import rebin_flux
 
-rebinned = rebin_flux(image, pixscale_src=1.0, pixscale_tgt=2.5,
-                     shape_tgt=(40, 40))
+rebinned = rebin_flux(image, pixscale_src=1.0, pixscale_tgt=2.5, shape_tgt=(40, 40))
 ```
 
 Each output is the sum of source-pixel flux multiplied by the fraction of each
