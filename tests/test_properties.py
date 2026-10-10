@@ -93,6 +93,9 @@ class TestFluxConservationProperties:
 class TestRotationMatrixProperties:
     """Property-based tests for rotation matrix invariants."""
 
+    # No deadline: the first example pays JIT compilation, which on a GPU
+    # backend can exceed hypothesis' 200 ms default.
+    @settings(deadline=None)
     @given(angle=floats(min_value=-1000.0, max_value=1000.0))
     def test_determinant_is_always_one(self, angle):
         """det(R) = 1 for all valid angles (prevents scaling/shearing)."""
@@ -100,6 +103,7 @@ class TestRotationMatrixProperties:
         det = R[0, 0] * R[1, 1] - R[0, 1] * R[1, 0]
         assert jnp.isclose(det, 1.0, atol=1e-6)
 
+    @settings(deadline=None)
     @given(angle=floats(min_value=-1000.0, max_value=1000.0))
     def test_orthogonality(self, angle):
         """R^T @ R = I for all valid angles."""
@@ -107,6 +111,7 @@ class TestRotationMatrixProperties:
         eye = jnp.eye(2)
         assert jnp.allclose(R.T @ R, eye, atol=1e-6)
 
+    @settings(deadline=None)
     @given(
         angle1=floats(min_value=-360.0, max_value=360.0),
         angle2=floats(min_value=-360.0, max_value=360.0),
