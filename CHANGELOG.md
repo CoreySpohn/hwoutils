@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.11.0](https://github.com/CoreySpohn/hwoutils/compare/v1.10.0...v1.11.0) (2026-10-28)
+
+
+### Features
+
+* **constants:** add IAU 2015 nominal solar radius Rsun2m and Rsun2AU ([602295d](https://github.com/CoreySpohn/hwoutils/commit/602295d5f064eca5b74cff70f244d0c848cf0853))
+
 ## [1.10.0](https://github.com/CoreySpohn/hwoutils/compare/v1.9.0...v1.10.0) (2026-09-14)
 
 
