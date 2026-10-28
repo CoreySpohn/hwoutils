@@ -56,6 +56,8 @@ m2pc = 1.0 / pc2m
 pc2AU = 2.062648062470964e05
 Rearth2m = 6.3781e6  # Astropy/IAU default (equatorial)
 Rearth2AU = Rearth2m * m2AU
+Rsun2m = 6.957e8  # IAU 2015 nominal solar radius (Resolution B3)
+Rsun2AU = Rsun2m * m2AU
 
 # ---------------------------------------------------------------------------
 # Mass conversions

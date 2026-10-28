@@ -43,10 +43,11 @@ class TestConstantsValidation:
         assert jnp.isclose(hwo_const.Mjup2kg, astropy_const.M_jup.value, rtol=1e-12)
 
     def test_distances(self):
-        """Verify AU, parsec, and Earth radius match astropy."""
+        """Verify AU, parsec, and Earth and solar radii match astropy."""
         assert jnp.isclose(hwo_const.AU2m, astropy_const.au.value, rtol=1e-12)
         assert jnp.isclose(hwo_const.pc2m, astropy_const.pc.value, rtol=1e-12)
         assert jnp.isclose(hwo_const.Rearth2m, astropy_const.R_earth.value, rtol=1e-12)
+        assert jnp.isclose(hwo_const.Rsun2m, astropy_const.R_sun.value, rtol=1e-12)
 
 
 # =============================================================================
