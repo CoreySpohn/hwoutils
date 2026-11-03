@@ -1,0 +1,208 @@
+"""Tests for the pytest test budget guard (hwoutils.testbudget)."""
+
+import json
+
+import pytest
+
+from hwoutils.testbudget import trend
+from hwoutils.testbudget.cli import main as cli_main
+from hwoutils.testbudget.config import load_config
+
+pytest_plugins = ["pytester"]
+
+
+@pytest.fixture
+def project(pytester, tmp_path):
+    """Return a helper that writes a pyproject with a budget table and runs pytest."""
+    trend_file = tmp_path / "trend.jsonl"
+
+    def make(table="", body="", args=()):
+        pytester.makepyprojecttoml(
+            '[project]\nname = "demo"\n[tool.testbudget]\n'
+            f'trend_file = "{trend_file}"\nrss_poll_s = 0\n{table}\n'
+        )
+        pytester.makepyfile(test_demo=body)
+        return pytester.runpytest_inprocess("-p", "hwoutils.testbudget.plugin", *args)
+
+    make.trend_file = trend_file
+    return make
+
+
+SLEEPY = """
+import time
+def test_sleepy():
+    time.sleep(0.3)
+"""
+
+
+def test_over_budget_fails_in_enforce_mode(project):
+    """Fails if an over-budget unit test passes silently under enforce."""
+    result = project('mode = "enforce"\nunit_s = 0.1', SLEEPY)
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(["*over its budget of 0.1 s*"])
+
+
+def test_over_budget_only_reported_in_report_mode(project):
+    """Fails if report mode changes the test outcome."""
+    result = project("unit_s = 0.1", SLEEPY)
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(["*violations=1*", "*over budget:*took*"])
+
+
+def test_tier_marker_selects_budget(project):
+    """Fails if a medium marker does not get the medium budget."""
+    body = SLEEPY.replace("def test", "import pytest\n@pytest.mark.medium\ndef test")
+    result = project('mode = "enforce"\nunit_s = 0.1\nmedium_s = 5', body)
+    result.assert_outcomes(passed=1)
+
+
+def test_cli_mode_overrides_pyproject(project):
+    """Fails if the command line switch cannot adopt a library in report mode."""
+    result = project(
+        'mode = "enforce"\nunit_s = 0.1', SLEEPY, args=("--testbudget-mode", "report")
+    )
+    result.assert_outcomes(passed=1)
+
+
+def test_compile_budget_marker_counts_distinct_programs(project):
+    """Fails if value-different static jit keys are not counted as compiles."""
+    body = """
+import jax, jax.numpy as jnp, functools, pytest
+
+@pytest.mark.compile_budget(1)
+def test_static_keys():
+    @functools.partial(jax.jit, static_argnums=0)
+    def scale(k, x):
+        return x * k
+    x = jnp.ones(3)
+    for k in (2, 3, 4):
+        scale(k, x)
+"""
+    result = project('mode = "enforce"', body)
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(["*compiled [345] programs*"])
+
+
+def test_module_compile_budget_fails_module_teardown(project):
+    """Fails if a per-module compile budget does not turn into an error."""
+    body = """
+import jax, jax.numpy as jnp
+
+def test_a():
+    x = jnp.ones(2)
+    jax.jit(lambda x: x + 1)(x)
+    jax.jit(lambda x: x + 2)(x)
+"""
+    result = project('mode = "enforce"\nmodule_compile_budget = 1', body)
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(["*test_demo.py compiled * programs*"])
+
+
+def test_clear_caches_is_opt_in(project, monkeypatch):
+    """Fails if the module fixture clears caches without the config switch."""
+    import hwoutils.testbudget.plugin as plugin
+
+    calls = []
+    monkeypatch.setattr(plugin, "clear_jax_caches", lambda: calls.append(1))
+    project("", "def test_a():\n    pass\n")
+    assert calls == []
+    project("clear_caches = true", "def test_a():\n    pass\n")
+    assert calls == [1]
+
+
+def test_rss_ceiling_stops_session(project):
+    """Fails if a session over the memory ceiling keeps running."""
+    body = "def test_a():\n    pass\ndef test_b():\n    pass\n"
+    result = project("rss_ceiling_gb = 0.001", body)
+    assert result.ret == 97
+    result.stdout.fnmatch_lines(["*passed the 0.0 GB ceiling*"])
+
+
+def test_rss_growth_reported(project):
+    """Fails if a test that allocates memory is missing from the growth report."""
+    body = (
+        "keep = []\n"
+        "def test_big():\n"
+        "    buf = bytearray(200 * 1024**2)\n"
+        "    buf[::4096] = b'x' * len(buf[::4096])\n"
+        "    keep.append(buf)\n"
+    )
+    result = project("rss_growth_report_mb = 50", body, args=("--budget-report",))
+    result.stdout.fnmatch_lines(["*MB  *test_big*"])
+
+
+def test_trend_line_is_written(project):
+    """Fails if a session does not append one parseable summary line."""
+    project("", "def test_a():\n    pass\n")
+    lines = project.trend_file.read_text().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["library"] == "demo"
+    assert rec["tests"] == 1
+    assert rec["slowest"][0][0].endswith("test_a")
+
+
+def test_compile_cache_dir_gets_gitignore(pytester, project):
+    """Fails if the persistent cache directory is not self-ignoring."""
+    project("compile_cache = true", "def test_a():\n    pass\n")
+    assert (pytester.path / ".jax_cache" / ".gitignore").read_text() == "*\n"
+
+
+def test_unknown_config_key_is_an_error(tmp_path):
+    """Fails if a misspelled key silently leaves a budget at its default."""
+    (tmp_path / "pyproject.toml").write_text("[tool.testbudget]\nunit_secs = 1\n")
+    with pytest.raises(ValueError, match="unit_secs"):
+        load_config(tmp_path)
+
+
+def test_xdist_workers_are_aggregated(project):
+    """Fails if worker results are lost from the controller summary."""
+    pytest.importorskip("xdist")
+    body = "def test_a():\n    pass\ndef test_b():\n    pass\n"
+    result = project("", body, args=("-n", "2"))
+    result.assert_outcomes(passed=2)
+    assert json.loads(project.trend_file.read_text())["tests"] == 2
+
+
+def _rec(wall, args="x"):
+    return {
+        "wall_s": wall,
+        "peak_rss_gb": 1.0,
+        "compiles": 10,
+        "tests": 5,
+        "args": args,
+    }
+
+
+def test_growth_flag_needs_20_percent_over_prior_mean():
+    """Fails if growth is flagged below 20 percent or missed above it."""
+    history = [_rec(10.0)] * 5
+    assert trend.growth_flags([*history, _rec(11.5)]) == {}
+    assert set(trend.growth_flags([*history, _rec(13.0)])) == {"wall_s"}
+
+
+def test_growth_compares_only_matching_invocations():
+    """Fails if a one-file run is compared against full-suite runs."""
+    history = [_rec(100.0, "all")] * 5
+    assert trend.growth_flags([*history, _rec(1.0, "one"), _rec(2.0, "one")]) == {}
+
+
+def test_cli_exit_code_follows_flags(tmp_path, capsys):
+    """Fails if the CLI does not print the table and exit 1 on a flag."""
+    path = tmp_path / "lib.jsonl"
+    for rec in [*[_rec(10.0)] * 4, _rec(20.0)]:
+        trend.append_record(path, {**rec, "time": "2026-01-01T00:00:00", "sha": "abc"})
+    assert cli_main(["trend", str(path)]) == 1
+    assert "FLAG wall_s" in capsys.readouterr().out
+
+
+def test_watchdog_kills_a_runaway_test(pytester):
+    """Fails if a single test that never returns can exceed the ceiling unnoticed."""
+    pytester.makepyprojecttoml(
+        '[project]\nname = "demo"\n[tool.testbudget]\ntrend = false\n'
+        "rss_ceiling_gb = 0.001\nrss_poll_s = 0.05\n"
+    )
+    pytester.makepyfile(test_demo="import time\ndef test_hang():\n    time.sleep(20)\n")
+    result = pytester.runpytest_subprocess("-p", "hwoutils.testbudget.plugin")
+    assert result.ret == 97
+    result.stderr.fnmatch_lines(["*ceiling during*test_hang*"])
