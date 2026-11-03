@@ -30,6 +30,9 @@ docs = [
 ]
 test = ["nox", "pytest", "hypothesis", "pytest-cov"]
 
+[project.scripts]
+testbudget = "hwoutils.testbudget.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/CoreySpohn/hwoutils"
 Issues = "https://github.com/CoreySpohn/hwoutils/issues"
