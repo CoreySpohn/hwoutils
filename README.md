@@ -53,6 +53,13 @@ sep_lod = conv.arcsec_to_lambda_d(5.0, 550.0, 6.0)
 resampled = resample_flux(psf, pixscale_src=0.01, pixscale_tgt=0.1, shape_tgt=(64, 64))
 ```
 
+## Test budget guard
+
+`hwoutils.testbudget` is an opt-in pytest plugin for time, memory and compile
+budgets. Add `pytest_plugins = ["hwoutils.testbudget.plugin"]` to the top-level
+`conftest.py` and a `[tool.testbudget]` table to `pyproject.toml`; see
+`docs/testbudget.md`.
+
 ## Documentation
 
 Full documentation is available at [hwoutils.readthedocs.io](https://hwoutils.readthedocs.io).
