@@ -1,4 +1,4 @@
-"""Tests for hwoutils.transforms — image and coordinate transforms."""
+"""Tests for hwoutils.transforms -- image and coordinate transforms."""
 
 import jax
 
@@ -25,17 +25,17 @@ class TestRotationMatrix:
         assert jnp.allclose(ccw_rotation_matrix(0.0), jnp.eye(2), atol=1e-10)
 
     def test_90_degrees(self):
-        """90° CCW rotation matrix values."""
+        """90 deg CCW rotation matrix values."""
         expected = jnp.array([[0.0, -1.0], [1.0, 0.0]])
         assert jnp.allclose(ccw_rotation_matrix(90.0), expected, atol=1e-6)
 
     def test_180_degrees(self):
-        """180° rotation should negate both axes."""
+        """180 deg rotation should negate both axes."""
         expected = jnp.array([[-1.0, 0.0], [0.0, -1.0]])
         assert jnp.allclose(ccw_rotation_matrix(180.0), expected, atol=1e-6)
 
     def test_270_degrees(self):
-        """270° CCW rotation (= 90° CW)."""
+        """270 deg CCW rotation (= 90 deg CW)."""
         expected = jnp.array([[0.0, 1.0], [-1.0, 0.0]])
         assert jnp.allclose(ccw_rotation_matrix(270.0), expected, atol=1e-6)
 
@@ -46,7 +46,7 @@ class TestRotationMatrix:
             assert jnp.isclose(det, 1.0, atol=1e-10)
 
     def test_chirality_preservation(self):
-        """Point at (1,0) rotated 90° CCW → (0,1), not (0,-1)."""
+        """Point at (1,0) rotated 90 deg CCW -> (0,1), not (0,-1)."""
         point = jnp.array([[1.0], [0.0]])
         rotated = ccw_rotation_matrix(90.0) @ point
         expected = jnp.array([[0.0], [1.0]])
@@ -95,7 +95,7 @@ class TestResampleFlux:
         assert jnp.isclose(jnp.sum(f_tgt), jnp.sum(f_src), rtol=0.05)
 
     def test_rotation_clips_corners(self):
-        """45° rotation of a uniform image clips corners — flux is lost.
+        """45 deg rotation of a uniform image clips corners -- flux is lost.
 
         This is physically correct: flux outside the source image
         is genuinely absent.
@@ -117,7 +117,7 @@ class TestResampleFlux:
         assert jnp.isclose(jnp.sum(resampled), flux_in, rtol=0.05)
 
     def test_gaussian_rotation_conservation(self):
-        """Compact Gaussian with 45° rotation should retain >90% flux."""
+        """Compact Gaussian with 45 deg rotation should retain >90% flux."""
         N = 100
         x = jnp.linspace(-2, 2, N)
         X, Y = jnp.meshgrid(x, x)

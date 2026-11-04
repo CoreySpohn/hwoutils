@@ -2,7 +2,7 @@
 
 Single source of truth for all constants used across the HWO simulation suite
 (yippy, orbix, coronagraphoto, coronalyze, hwosim). All values are plain floats
-or JAX arrays — no astropy.units dependency.
+or JAX arrays -- no astropy.units dependency.
 """
 
 import jax.numpy as jnp
@@ -18,21 +18,21 @@ GAUSSIAN_FWHM_FACTOR = 2 * jnp.sqrt(2 * jnp.log(2))  # sigma to FWHM
 # ---------------------------------------------------------------------------
 # Fundamental physical constants (SI)
 # ---------------------------------------------------------------------------
-h = 6.62607015e-34  # Planck constant [J·s]
+h = 6.62607015e-34  # Planck constant [J*s]
 c = 299792458.0  # Speed of light [m/s]
 k_B = 1.380649e-23  # Boltzmann constant [J/K]
-sigma_SB = 5.6703744191844314e-08  # Stefan-Boltzmann constant [W·m⁻²·K⁻⁴]
+sigma_SB = 5.6703744191844314e-08  # Stefan-Boltzmann constant [W*m^-2*K^-4]
 
 # ---------------------------------------------------------------------------
 # Gravitational constant
 # ---------------------------------------------------------------------------
-G_si = 6.67430e-11  # [m³·kg⁻¹·s⁻²]
-G = 1.488185170234519e-34  # [AU³·kg⁻¹·d⁻²] — for orbital dynamics
+G_si = 6.67430e-11  # [m^3*kg^-1*s^-2]
+G = 1.488185170234519e-34  # [AU^3*kg^-1*d^-2] -- for orbital dynamics
 
 # ---------------------------------------------------------------------------
 # Flux conversion
 # ---------------------------------------------------------------------------
-Jy = 1e-26  # 1 Jansky [W·m⁻²·Hz⁻¹]
+Jy = 1e-26  # 1 Jansky [W*m^-2*Hz^-1]
 
 # ---------------------------------------------------------------------------
 # Length conversions

@@ -1,4 +1,4 @@
-"""Tests for hwoutils.radial — radial distance and profile utilities."""
+"""Tests for hwoutils.radial -- radial distance and profile utilities."""
 
 import jax.numpy as jnp
 

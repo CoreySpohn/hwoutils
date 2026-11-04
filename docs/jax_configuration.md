@@ -16,7 +16,9 @@ happen as early as the first `import` that triggers array creation.
 Configuration set after initialization is either silently ignored or
 raises a `RuntimeError`.
 
-```python
+Run this startup preamble in a fresh Python process before any JAX computation.
+
+```python notest
 # CORRECT -- configure immediately after import
 import jax
 from hwoutils import enable_x64, set_platform
@@ -29,7 +31,9 @@ import jax.numpy as jnp  # safe: config is already set
 x = jnp.ones(10)  # uses float64 on CPU
 ```
 
-```python
+This deliberately incorrect startup order is shown for comparison only.
+
+```python notest
 # WRONG -- too late, JAX already initialized
 import jax.numpy as jnp
 
@@ -115,7 +119,9 @@ precision without affecting the rest of the program.
 
 Selects the compute backend (CPU, GPU, or TPU).
 
-```python
+This example requires a GPU and a fresh Python process.
+
+```python notest
 from hwoutils import set_platform
 
 set_platform("cpu")  # force CPU even if GPU is available
@@ -141,7 +147,9 @@ export JAX_PLATFORMS=gpu,cpu
 
 Or in code:
 
-```python
+This fallback configuration requires a fresh Python process.
+
+```python notest
 set_platform("gpu,cpu")
 ```
 
@@ -152,7 +160,9 @@ set_platform("gpu,cpu")
 Exposes multiple CPU cores as separate XLA devices, enabling
 `jax.pmap` on CPU:
 
-```python
+Run this device setup in a fresh Python process before any JAX computation.
+
+```python notest
 from hwoutils import set_host_device_count
 
 set_host_device_count(4)  # expose 4 CPU devices
@@ -167,8 +177,10 @@ set_host_device_count(4)  # expose 4 CPU devices
 
 ## Quick Reference
 
-```python
-# Standard preamble for scripts in this workspace
+This incomplete preamble requires application-specific libraries and imports.
+
+```python notest
+# Standard preamble for application scripts
 import jax
 from hwoutils import enable_x64, set_platform
 

@@ -1,6 +1,6 @@
 """Unit conversion functions using centralized constants.
 
-Pure JAX implementations — no astropy dependency. Functions are intentionally
+Pure JAX implementations -- no astropy dependency. Functions are intentionally
 NOT JIT-compiled so JAX can fuse them into larger computation graphs.
 """
 
@@ -14,23 +14,23 @@ from hwoutils import constants as const
 
 
 def jy_to_photons_per_nm_per_m2(flux_jy, wavelength_nm):
-    """Convert flux density from Janskys to photons/s/nm/m².
+    """Convert flux density from Janskys to photons/s/nm/m^2.
 
     Args:
         flux_jy: Flux density in Janskys.
         wavelength_nm: Wavelength in nanometers.
 
     Returns:
-        Flux density in photons/s/nm/m².
+        Flux density in photons/s/nm/m^2.
     """
     return flux_jy * const.Jy / (wavelength_nm * const.h)
 
 
 def photons_per_nm_per_m2_to_jy(flux_phot, wavelength_nm):
-    """Convert flux density from photons/s/nm/m² to Janskys.
+    """Convert flux density from photons/s/nm/m^2 to Janskys.
 
     Args:
-        flux_phot: Flux density in photons/s/nm/m².
+        flux_phot: Flux density in photons/s/nm/m^2.
         wavelength_nm: Wavelength in nanometers.
 
     Returns:
@@ -56,13 +56,13 @@ def flux_jy_to_mag(flux_jy):
 
 
 def mag_per_arcsec2_to_jy_per_arcsec2(mag_per_arcsec2):
-    """Convert surface brightness from mag/arcsec² to Jy/arcsec² (AB).
+    """Convert surface brightness from mag/arcsec^2 to Jy/arcsec^2 (AB).
 
     Args:
-        mag_per_arcsec2: Surface brightness in magnitudes per arcsec².
+        mag_per_arcsec2: Surface brightness in magnitudes per arcsec^2.
 
     Returns:
-        Surface brightness in Jy/arcsec².
+        Surface brightness in Jy/arcsec^2.
     """
     return mag_to_flux_jy(mag_per_arcsec2)
 

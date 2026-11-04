@@ -1,4 +1,4 @@
-"""Tests for hwoutils.conversions — unit conversion functions."""
+"""Tests for hwoutils.conversions -- unit conversion functions."""
 
 import jax.numpy as jnp
 
@@ -38,7 +38,7 @@ class TestFluxConversions:
         assert jnp.isclose(flux_jy, 3631.0, rtol=1e-3)
 
     def test_jy_to_photons_consistency(self):
-        """Verify Jy → photons/s/m²/nm against independent first-principles calc.
+        """Verify Jy -> photons/s/m^2/nm against independent first-principles calc.
 
         Physics: F_photons = F_nu * Jy * c / (h * lam^2) (per nm).
         """
@@ -56,7 +56,7 @@ class TestFluxConversions:
         assert jnp.isclose(flux_phot, expected, rtol=0.01)
 
     def test_stellar_flux_order_of_magnitude(self):
-        """A 0 mag star should produce ~10⁷ ph/s/m²/nm at V-band."""
+        """A 0 mag star should produce ~10^7 ph/s/m^2/nm at V-band."""
         flux_phot = conv.jy_to_photons_per_nm_per_m2(3631.0, 550.0)
         assert 1e6 < flux_phot < 1e9
 
@@ -95,11 +95,11 @@ class TestLengthConversions:
         assert jnp.isclose(conv.m_to_au(conv.au_to_m(1.0)), 1.0)
 
     def test_au_to_m_value(self):
-        """1 AU ≈ 1.496e11 m."""
+        """1 AU approximately 1.496e11 m."""
         assert jnp.isclose(conv.au_to_m(1.0), const.AU2m, rtol=1e-6)
 
     def test_rearth_to_m(self):
-        """1 Earth radius ≈ 6.371e6 m."""
+        """1 Earth radius approximately 6.371e6 m."""
         assert jnp.isclose(conv.Rearth_to_m(1.0), const.Rearth2m, rtol=1e-3)
 
 
@@ -125,13 +125,13 @@ class TestAngularConversions:
         assert jnp.isclose(conv.arcsec_to_mas(conv.mas_to_arcsec(100.0)), 100.0)
 
     def test_lambda_d_arcsec_roundtrip(self):
-        """Verify λ/D to arcsec conversion is reversible."""
+        """Verify lambda/D to arcsec conversion is reversible."""
         angle_arcsec = conv.lambda_d_to_arcsec(5.0, 600.0, 6.0)
         angle_lod_back = conv.arcsec_to_lambda_d(angle_arcsec, 600.0, 6.0)
         assert jnp.isclose(angle_lod_back, 5.0, rtol=1e-6)
 
     def test_lambda_d_wavelength_scaling(self):
-        """λ/D angular size must scale linearly with wavelength."""
+        """lambda/D angular size must scale linearly with wavelength."""
         lod_blue = conv.lambda_d_to_arcsec(1.0, 500.0, 6.0)
         lod_red = conv.lambda_d_to_arcsec(1.0, 1000.0, 6.0)
         assert jnp.isclose(lod_red / lod_blue, 2.0, rtol=1e-6)
@@ -187,11 +187,11 @@ class TestMassConversions:
     """Tests for mass conversion functions."""
 
     def test_msun_to_kg(self):
-        """1 Msun ≈ 1.989e30 kg."""
+        """1 Msun approximately 1.989e30 kg."""
         assert jnp.isclose(conv.Msun_to_kg(1.0), const.Msun2kg, rtol=1e-3)
 
     def test_mearth_to_kg(self):
-        """1 Mearth ≈ 5.972e24 kg."""
+        """1 Mearth approximately 5.972e24 kg."""
         assert jnp.isclose(conv.Mearth_to_kg(1.0), const.Mearth2kg, rtol=1e-3)
 
 

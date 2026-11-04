@@ -157,7 +157,7 @@ def rebin_flux(
 def _decompose_angle(angle: jax.Array) -> tuple[jax.Array, jax.Array]:
     """Split an angle into a (-45, 45] remainder plus a count of 90 deg turns.
 
-    The three-shear Fourier rotation is only well behaved for |angle| <= 45
+    The three-shear Fourier rotation is only well behaved for ``|angle| <= 45``
     deg, so larger rotations are handled by lossless 90 deg array rotations
     plus a small residual shear rotation.
     """

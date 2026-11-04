@@ -1,4 +1,4 @@
-"""Tests for hwoutils.map_coordinates — cubic spline interpolation."""
+"""Tests for hwoutils.map_coordinates -- cubic spline interpolation."""
 
 import jax
 

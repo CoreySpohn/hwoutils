@@ -28,6 +28,7 @@ pip install hwoutils
 :maxdepth: 2
 
 jax_configuration
+interpolation
 testbudget
 ```
 

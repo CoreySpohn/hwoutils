@@ -14,24 +14,27 @@ extensions = [
     "myst_nb",
     "autoapi.extension",
     "sphinx.ext.autodoc",
+    "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinx.ext.mathjax",
     "IPython.sphinxext.ipython_console_highlighting",
 ]
 
-templates_path = ["_templates"]
+templates_path = []
 exclude_patterns = ["_build", ".build", "Thumbs.db", ".DS_Store"]
 
 autoapi_dirs = ["../src"]
 autoapi_ignore = ["**/*version.py"]
 autodoc_typehints = "description"
+# AutoAPI already indexes fields; Napoleon should render their descriptions only.
+napoleon_use_ivar = True
 
 myst_enable_extensions = ["amsmath", "dollarmath"]
 
 # -- Options for HTML output -------------------------------------------------
 
 html_theme = "sphinx_book_theme"
-html_static_path = ["_static"]
+html_static_path = []
 master_doc = "index"
 html_title = "hwoutils"
 

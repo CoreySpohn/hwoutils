@@ -51,7 +51,9 @@ conserving a global sum alone does not establish correct local photometry.
 
 Use `rebin_flux` for conservative axis-aligned changes of pixel grid:
 
-```python
+This example requires a user-provided image array, `image`.
+
+```python notest
 from hwoutils.transforms import rebin_flux
 
 rebinned = rebin_flux(image, pixscale_src=1.0, pixscale_tgt=2.5, shape_tgt=(40, 40))

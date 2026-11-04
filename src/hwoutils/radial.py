@@ -46,7 +46,7 @@ def radial_profile(
     Args:
         image: 2D input image.
         pixel_scale_arcsec: Conversion factor from pixels to physical units
-            (e.g. λ/D per pixel). Default 1.0 gives bins in pixels.
+            (e.g. lambda/D per pixel). Default 1.0 gives bins in pixels.
         center: Center coordinates (cy, cx). If None, uses geometric center.
         nbins: Number of radial bins. If None, uses ``floor(max_dim / 2)``.
 
