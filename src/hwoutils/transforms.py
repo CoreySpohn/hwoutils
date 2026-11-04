@@ -252,10 +252,10 @@ def rotate_image(
         raise ValueError("rotate_image requires a nonempty square image")
     translation = None
     if center is not None:
-        center = jnp.asarray(center)
-        if center.shape != (2,):
+        center_array = jnp.asarray(center)
+        if center_array.shape != (2,):
             raise ValueError("center must contain (row, column)")
-        cy, cx = jnp.asarray(center) - (image.shape[0] - 1) / 2
+        cy, cx = center_array - (image.shape[0] - 1) / 2
         theta = jnp.deg2rad(rotation_deg)
         cosine, sine = jnp.cos(theta), jnp.sin(theta)
         translation = (

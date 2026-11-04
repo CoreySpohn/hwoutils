@@ -130,16 +130,20 @@ def test_noninteger_downsampling_preserves_float32_storage():
 
 
 @pytest.mark.parametrize("angle", [30.0, 90.0, 180.0])
-def test_rotation_about_optical_center(angle):
+@pytest.mark.parametrize("x64", [False, True])
+def test_rotation_about_optical_center(angle, x64):
     """FITS optical centers need not equal the geometric array center."""
     y, x = np.mgrid[:64, :64]
-    source = jnp.asarray(np.exp(-((y - 28) ** 2 + (x - 38) ** 2) / 18))
+    source = np.exp(-((y - 28) ** 2 + (x - 38) ** 2) / 18)
     theta = np.deg2rad(angle)
     cx = 32 + 6 * np.cos(theta) + 4 * np.sin(theta)
     cy = 32 + 6 * np.sin(theta) - 4 * np.cos(theta)
     expected = np.exp(-((y - cy) ** 2 + (x - cx) ** 2) / 18)
-    actual = rotate_image(source, angle, center=(32.0, 32.0), pad_factor=1.5)
-    np.testing.assert_allclose(actual, expected, atol=1e-10)
+    with jax.enable_x64(x64):
+        actual = rotate_image(
+            jnp.asarray(source), angle, center=(32.0, 32.0), pad_factor=1.5
+        )
+        np.testing.assert_allclose(actual, expected, atol=1e-10 if x64 else 1e-6)
 
 
 def test_nyquist_shear_uses_real_cosine_interpolant():
