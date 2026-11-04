@@ -82,6 +82,17 @@ def resample_flux(
     not a conservative pixel integrator or an antialiasing filter. Use
     ``rebin_flux`` for conservative, axis-aligned pixel overlap integration.
 
+    Approximate photometry requires a source smooth on both grids and
+    negligible at the zero-padded source boundaries. A Gaussian truncated
+    while still bright at those boundaries has a sharp edge that can alias:
+    a sigma=1.5 source-pixel Gaussian on a 5x5 cutout can exceed 5% flux
+    error even with a target/source scale ratio below two and a target
+    containing the entire reconstruction. For this Gaussian, conservation
+    checks use source samples extending at least four sigma from the peak
+    on every side and scale ratios below two (target sigma > 0.75 pixels).
+    These conditions describe a tested smooth-source regime, not an error
+    bound for arbitrary images. Check convergence for the chosen sampling.
+
     Args:
         f_src: Source image (2D), interpreted as flux per source pixel.
         pixscale_src: Source pixel scale.

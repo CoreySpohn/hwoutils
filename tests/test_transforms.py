@@ -1,6 +1,7 @@
 """Tests for hwoutils.transforms -- image and coordinate transforms."""
 
 import jax
+import pytest
 
 jax.config.update("jax_enable_x64", True)
 
@@ -151,6 +152,51 @@ class TestResampleFluxKeys:
     These examples do not establish conservation for arbitrary images or
     arbitrary scale ratios; conservative reduction is tested separately.
     """
+
+    @pytest.mark.parametrize(
+        "size_tgt,pixscale_src,pixscale_tgt,angle,expected_flux",
+        [
+            # Nightly seed 1 shrank the conservation failure to this loss.
+            (10, 0.078125, 0.140625, 0.0, 93.59259893054728),
+            # A targeted Hypothesis search shrank the overshoot to this case.
+            (11, 0.0859375, 0.15625, 0.0, 106.84863995719748),
+            (11, 0.0859375, 0.15625, 1.0, 106.84448910043533),
+            (11, 0.0859375, 0.15625, 5.0, 106.79577547363107),
+        ],
+    )
+    def test_truncated_gaussian_sampling_limit(
+        self, size_tgt, pixscale_src, pixscale_tgt, angle, expected_flux
+    ):
+        """Bright cutout edges alias despite a containing target and scale <2."""
+        y, x = jnp.mgrid[:5, :5]
+        source = jnp.exp(-((y - 2.5) ** 2 + (x - 2.5) ** 2) / (2 * 1.5**2))
+        source = source / source.sum() * 100.0
+        assert pixscale_tgt / pixscale_src < 2.0
+        assert size_tgt * pixscale_tgt > jnp.sqrt(50.0) * pixscale_src + (
+            4.0 * pixscale_tgt
+        )
+
+        result = resample_flux(
+            source, pixscale_src, pixscale_tgt, (size_tgt, size_tgt), angle
+        )
+        assert jnp.isclose(result.sum(), expected_flux, rtol=1e-10)
+        assert not jnp.isclose(result.sum(), 100.0, rtol=0.05)
+
+        # Extra target coverage preserves the sampling phase and the error.
+        larger = resample_flux(
+            source,
+            pixscale_src,
+            pixscale_tgt,
+            (size_tgt + 20, size_tgt + 20),
+            angle,
+        )
+        assert jnp.isclose(larger.sum(), result.sum(), rtol=1e-10)
+
+        # Finer sampling recovers the reconstruction's integral: the area
+        # factor and zero-padded stencil are correct, but coarse quadrature
+        # cannot resolve the bright, abruptly truncated wings.
+        finer = resample_flux(source, pixscale_src, pixscale_src / 4, (100, 100), angle)
+        assert jnp.isclose(finer.sum(), 100.0, rtol=1e-6)
 
     def test_compact_gaussian_integer_downsample(self):
         """Compact Gaussian, 2x integer downsample: <1% flux error.
