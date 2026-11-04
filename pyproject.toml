@@ -63,7 +63,7 @@ content-type = "text/markdown"
 path = "README.md"
 
 [tool.ruff.lint]
-select = ["B", "D", "E", "F", "I", "UP", "RUF"]
+select = ["B", "D", "E", "F", "I", "UP", "RUF", "NPY"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D"]  # test functions / fixtures do not need docstrings
