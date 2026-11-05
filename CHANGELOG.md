@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.11.0](https://github.com/CoreySpohn/hwoutils/compare/v1.10.0...v1.11.0) (2026-11-05)
+
+
+### Features
+
+* **constants:** add IAU 2015 nominal solar radius Rsun2m and Rsun2AU ([602295d](https://github.com/CoreySpohn/hwoutils/commit/602295d5f064eca5b74cff70f244d0c848cf0853))
+* **testbudget:** pytest guard for per-test time, memory ceiling, compile counts and trend file ([7303554](https://github.com/CoreySpohn/hwoutils/commit/73035540db0e4ed7c6066b9c2cb17c1ae3799b7e))
+
+
+### Bug Fixes
+
+* **hwoutils:** preserve rotation center tuple type ([683aa52](https://github.com/CoreySpohn/hwoutils/commit/683aa5221a04775956076cc4b96b59a38a5e2bc7))
+
 ## [1.10.0](https://github.com/CoreySpohn/hwoutils/compare/v1.9.0...v1.10.0) (2026-09-14)
 
 
