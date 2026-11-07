@@ -67,6 +67,43 @@ def mag_per_arcsec2_to_jy_per_arcsec2(mag_per_arcsec2):
     return mag_to_flux_jy(mag_per_arcsec2)
 
 
+def mjy_per_sr_to_jy_per_arcsec2(surface_brightness):
+    """Convert surface brightness from MJy/sr to Jy/arcsec^2.
+
+    Args:
+        surface_brightness: Surface brightness in MJy/sr.
+
+    Returns:
+        Surface brightness in Jy/arcsec^2.
+    """
+    return surface_brightness * 1e6 * const.arcsec2rad**2
+
+
+def jy_per_arcsec2_to_mjy_per_sr(surface_brightness):
+    """Convert surface brightness from Jy/arcsec^2 to MJy/sr.
+
+    Args:
+        surface_brightness: Surface brightness in Jy/arcsec^2.
+
+    Returns:
+        Surface brightness in MJy/sr.
+    """
+    return surface_brightness * 1e-6 * const.rad2arcsec**2
+
+
+def mjy_per_sr_to_jy(surface_brightness, solid_angle_sr):
+    """Flux density in Jy of a uniform MJy/sr surface brightness over a solid angle.
+
+    Args:
+        surface_brightness: Surface brightness in MJy/sr.
+        solid_angle_sr: Solid angle in steradians (e.g. one detector pixel).
+
+    Returns:
+        Flux density in Jy.
+    """
+    return surface_brightness * 1e6 * solid_angle_sr
+
+
 # ---------------------------------------------------------------------------
 # Length conversions
 # ---------------------------------------------------------------------------

@@ -96,3 +96,23 @@ class TestConversionsValidation:
         hwo_jy = hwo_conv.mag_per_arcsec2_to_jy_per_arcsec2(15.0)
 
         assert jnp.isclose(hwo_jy, astropy_jy.value, rtol=1e-12)
+
+    def test_mjy_per_sr_to_jy_per_arcsec2(self):
+        """Cross-validate MJy/sr against Jy/arcsec^2, both directions."""
+        sb = 12.5 * u.MJy / u.sr
+        astropy_val = sb.to(u.Jy / u.arcsec**2).value
+
+        hwo_val = hwo_conv.mjy_per_sr_to_jy_per_arcsec2(12.5)
+        back = hwo_conv.jy_per_arcsec2_to_mjy_per_sr(astropy_val)
+
+        assert jnp.isclose(hwo_val, astropy_val, rtol=1e-12, atol=0.0)
+        assert jnp.isclose(back, 12.5, rtol=1e-12, atol=0.0)
+
+    def test_mjy_per_sr_to_jy(self):
+        """Cross-validate a surface brightness times a pixel solid angle."""
+        pixel_sr = 9.3e-14  # order of a NIRCam long-wave pixel
+        astropy_val = ((12.5 * u.MJy / u.sr) * (pixel_sr * u.sr)).to(u.Jy).value
+
+        hwo_val = hwo_conv.mjy_per_sr_to_jy(12.5, pixel_sr)
+
+        assert jnp.isclose(hwo_val, astropy_val, rtol=1e-12, atol=0.0)
