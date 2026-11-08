@@ -35,6 +35,17 @@ class BudgetConfig:
             Zero disables the check. The value is used as written: the plugin
             applies no scale factor to any budget.
         module_compile_seconds_by_file: Per-file overrides keyed by file name.
+        module_mode: Mode for the module compile budgets only. Empty follows
+            ``mode``, so a library can enforce its test budgets while it
+            measures new module budgets in report mode.
+        charge_fixture_setup: Judge each test on its call time plus the setup
+            time of the fixtures it uses: all of a function-scoped fixture's
+            setup and an equal share of a wider-scoped fixture's setup among
+            the tests that use it. A compile moved into a fixture that only one
+            test uses then still counts against that test.
+        require_tier_reason: A ``medium`` or ``slow`` mark must give a reason,
+            as ``reason="..."`` or a first string argument; a mark without one
+            is a violation of that test.
         clear_caches: Run ``jax.clear_caches()`` and ``gc.collect()`` after
             each test module.
         compile_cache: Enable the persistent JAX compilation cache.
@@ -58,6 +69,9 @@ class BudgetConfig:
     module_compile_budget_by_file: dict = field(default_factory=dict)
     module_compile_seconds: float = 0.0
     module_compile_seconds_by_file: dict = field(default_factory=dict)
+    module_mode: str = ""
+    charge_fixture_setup: bool = False
+    require_tier_reason: bool = False
     clear_caches: bool = False
     compile_cache: bool = False
     compile_cache_dir: str = ".jax_cache"
@@ -67,6 +81,10 @@ class BudgetConfig:
     def tier_budget_s(self, tier: str) -> float:
         """Return the call-time budget for a tier name."""
         return {"unit": self.unit_s, "medium": self.medium_s, "slow": self.slow_s}[tier]
+
+    def module_enforced(self) -> bool:
+        """Return whether module compile budgets fail the session."""
+        return (self.module_mode or self.mode) == "enforce"
 
     def ceiling_gb(self, tier: str) -> float:
         """Return the resident-size ceiling that applies while a tier runs."""
@@ -110,6 +128,11 @@ def load_config(root: Path) -> BudgetConfig:
     if cfg.mode not in MODES:
         raise ValueError(
             f"[tool.testbudget] mode must be one of {MODES}, got {cfg.mode!r}"
+        )
+    if cfg.module_mode not in ("", *MODES):
+        raise ValueError(
+            f"[tool.testbudget] module_mode must be empty or one of {MODES}, "
+            f"got {cfg.module_mode!r}"
         )
     if not cfg.library:
         cfg = BudgetConfig(**{**data, "library": project_name or Path(root).name})

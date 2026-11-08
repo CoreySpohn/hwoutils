@@ -446,3 +446,159 @@ def test_watchdog_kills_a_runaway_test(pytester):
     result = pytester.runpytest_subprocess("-p", "hwoutils.testbudget.plugin")
     assert result.ret == 97
     result.stderr.fnmatch_lines(["*ceiling during*test_hang*"])
+
+
+SINGLE_USE_FIXTURE = """
+import time
+import pytest
+
+@pytest.fixture
+def built():
+    time.sleep(0.4)
+    return 1
+
+def test_uses_built(built):
+    assert built == 1
+"""
+
+
+def test_single_use_fixture_setup_counts_against_its_test(project):
+    """Fails if moving work into a one-test fixture escapes the tier budget."""
+    table = 'mode = "enforce"\nunit_s = 0.2\ncharge_fixture_setup = true'
+    result = project(table, SINGLE_USE_FIXTURE)
+    result.assert_outcomes(passed=1)
+    assert result.ret != 0
+    result.stdout.fnmatch_lines(
+        ["*over budget:*test_uses_built*with its share of fixture setup*'built'*"]
+    )
+    off = project('mode = "enforce"\nunit_s = 0.2', SINGLE_USE_FIXTURE)
+    assert off.ret == 0
+
+
+def test_fixture_charge_only_reported_in_report_mode(project):
+    """Fails if report mode turns a fixture charge into a failing session."""
+    result = project("unit_s = 0.2\ncharge_fixture_setup = true", SINGLE_USE_FIXTURE)
+    assert result.ret == 0
+    result.stdout.fnmatch_lines(["*violations=1*"])
+
+
+SHARED_FIXTURE = """
+import time
+import pytest
+
+@pytest.fixture(scope="module")
+def built():
+    time.sleep(0.4)
+    return 1
+
+@pytest.mark.parametrize("k", range(4))
+def test_uses_built(built, k):
+    assert built == 1
+"""
+
+
+def test_shared_fixture_setup_is_split_among_its_users(project, tmp_path):
+    """Fails if a fixture shared by four tests charges its whole setup to one."""
+    out = tmp_path / "budget.json"
+    table = 'mode = "enforce"\nunit_s = 0.2\ncharge_fixture_setup = true'
+    result = project(table, SHARED_FIXTURE, args=("--budget-json", str(out)))
+    result.assert_outcomes(passed=4)
+    assert result.ret == 0
+    shares = [r["setup_share_s"] for r in json.loads(out.read_text())["records"]]
+    assert len(shares) == 4
+    assert max(shares) == pytest.approx(min(shares), abs=0.01)
+    assert 0.09 < shares[0] < 0.2
+
+
+DYNAMIC_FIXTURE = """
+import time
+import pytest
+
+@pytest.fixture
+def inner():
+    time.sleep(0.4)
+
+@pytest.fixture
+def outer(request):
+    request.getfixturevalue("inner")
+
+def test_uses_outer(outer):
+    pass
+"""
+
+
+def test_fixture_pulled_in_by_name_lookup_is_charged(project):
+    """Fails if getfixturevalue hides a fixture's setup from the test using it."""
+    table = 'mode = "enforce"\nunit_s = 0.2\ncharge_fixture_setup = true'
+    result = project(table, DYNAMIC_FIXTURE)
+    assert result.ret != 0
+    result.stdout.fnmatch_lines(["*test_uses_outer*'outer'*"])
+
+
+def test_xdist_fixture_charge_fails_the_session(project):
+    """Fails if a fixture charge found on a worker leaves the session green."""
+    pytest.importorskip("xdist")
+    table = 'mode = "enforce"\nunit_s = 0.2\ncharge_fixture_setup = true'
+    result = project(table, SINGLE_USE_FIXTURE, args=("-n", "2"))
+    assert result.ret != 0
+    result.stdout.fnmatch_lines(["*over budget:*with its share of fixture setup*"])
+
+
+TIER_MARKS = """
+import pytest
+
+@pytest.mark.medium
+def test_no_reason():
+    pass
+
+@pytest.mark.medium(reason="one study, both executors")
+def test_keyword_reason():
+    pass
+
+@pytest.mark.slow("200 worlds")
+def test_positional_reason():
+    pass
+"""
+
+
+def test_tier_mark_without_reason_is_a_violation(project):
+    """Fails if a medium mark with no reason passes when reasons are required."""
+    result = project('mode = "enforce"\nrequire_tier_reason = true', TIER_MARKS)
+    result.assert_outcomes(passed=2, failed=1)
+    result.stdout.fnmatch_lines(["*test_no_reason*medium mark gives no reason*"])
+    assert project('mode = "enforce"', TIER_MARKS).ret == 0
+
+
+def test_module_mode_reports_while_tests_are_enforced(project):
+    """Fails if module_mode cannot keep module budgets report-only."""
+    table = 'mode = "enforce"\nmodule_mode = "report"\nmodule_compile_seconds = 1'
+    result = project(table, FAKE_EVENTS)
+    result.assert_outcomes(passed=1)
+    assert result.ret == 0
+    result.stdout.fnmatch_lines(["*violations=1*", "*over budget:*spent 3.5 s*"])
+    strict = project('module_mode = "enforce"\nmodule_compile_seconds = 1', FAKE_EVENTS)
+    strict.assert_outcomes(passed=1, errors=1)
+
+
+def test_module_mode_must_be_known(tmp_path):
+    """Fails if a misspelt module_mode is accepted silently."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.testbudget]\nmodule_mode = "enforced"\n'
+    )
+    with pytest.raises(ValueError, match="module_mode"):
+        load_config(tmp_path)
+
+
+def test_budget_json_and_tier_counts(project, tmp_path):
+    """Fails if the JSON dump or the tier line loses module compiles or tiers."""
+    out = tmp_path / "sub" / "budget.json"
+    result = project("", FAKE_EVENTS + TIER_MARKS, args=("--budget-json", str(out)))
+    result.stdout.fnmatch_lines(["tiers: unit=1 medium=2 slow=1"])
+    data = json.loads(out.read_text())
+    assert data["module_compiles"] == {"test_demo.py": 3}
+    assert data["module_compile_s"]["test_demo.py"] == pytest.approx(3.5)
+    assert data["tiers"] == {"unit": 1, "medium": 2, "slow": 1}
+    assert len(data["records"]) == 4
+    assert "fixtures" not in data["records"][0]
+    trend_line = json.loads(project.trend_file.read_text().splitlines()[-1])
+    assert trend_line["tiers"] == {"unit": 1, "medium": 2, "slow": 1}

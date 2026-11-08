@@ -46,6 +46,30 @@ time and the budget. The remedy is to shrink the test or reuse a compiled
 fixture, not to raise the budget. `@pytest.mark.time_budget(seconds)`
 overrides the tier for one test and should carry a comment giving the reason.
 
+With `require_tier_reason = true`, a `medium` or `slow` mark must say why the
+test cannot be cheaper, as `@pytest.mark.medium(reason="one study, both
+executors")` or a first string argument. A mark without one is a violation of
+that test, so the slower tiers stay a list of explained exceptions.
+
+### Fixture setup
+
+The tier budget times the call phase. Work moved into a fixture leaves the
+call phase, so a test can look cheap while the fixture that only it uses
+carries the cost. With `charge_fixture_setup = true` each test is judged on
+its cost: its call time plus the setup time of every fixture it uses, where a
+fixture instance's setup is split equally among the tests that used it. A
+function-scoped fixture has one user and is charged in full; a module-scoped
+fixture shared by thirty tests charges each a thirtieth. Sharing one expensive
+structure across many tests therefore passes, and a fixture built for one test
+does not hide that test's cost.
+
+A fixture's setup time includes any fixture it pulls in with
+`request.getfixturevalue`; fixtures it requests as arguments are set up first
+and charged on their own. The charge is judged when the session ends, because
+the number of users is known only then: in enforce mode the session exits
+nonzero and lists each test under over-budget items. `--budget-report` lists
+the tests with the largest fixture charge and the fixture behind it.
+
 ## Memory
 
 The plugin samples resident memory for each process (each xdist worker is its
@@ -102,6 +126,20 @@ count and seconds per module, top ten by seconds.
   mode the session then exits nonzero and lists the module under over-budget
   items, because no test is left to fail.
 
+`module_mode` sets the mode of the module budgets alone; empty follows `mode`.
+A library that enforces its test budgets can add module budgets with
+`module_mode = "report"`, read the violations for a few runs, and then switch
+them to `enforce`.
+
+## Session JSON
+
+`--budget-json PATH` writes the merged session summary as JSON: totals, test
+counts per tier, violations, compile counts and seconds per module, and one
+record per test (tier, call time, compiles, compile seconds and, with fixture
+charging on, the fixture share and total cost). Under xdist the controller
+writes it with the workers' figures summed. Budgets can be set from this file
+after a run on the machine that enforces them.
+
 ## Fixture and compilation cache
 
 With `clear_caches = true` an autouse module-scoped fixture calls
@@ -114,7 +152,8 @@ overrides the directory.
 ## Trend file
 
 Each session appends a JSON line (library, commit, invocation, tests, wall
-time, peak resident GB, compiles, compile seconds, violations, slowest five) to
+time, peak resident GB, compiles, compile seconds, violations, tests per
+tier, slowest five) to
 `~/hwo-data/testbudget/<library>.jsonl`. `trend_file` or
 `TESTBUDGET_TREND_FILE` changes the path, and `trend = false` turns it off.
 
@@ -144,6 +183,9 @@ All keys live under `[tool.testbudget]`. An unknown key is an error.
 | `module_compile_budget_by_file` | empty | per-file overrides |
 | `module_compile_seconds` | 0 | compile seconds per module; 0 disables |
 | `module_compile_seconds_by_file` | empty | per-file overrides |
+| `module_mode` | empty | mode of the module budgets; empty follows `mode` |
+| `charge_fixture_setup` | false | judge each test with its share of fixture setup |
+| `require_tier_reason` | false | `medium` and `slow` marks must give a reason |
 | `clear_caches` | false | clear JAX caches after each module |
 | `compile_cache`, `compile_cache_dir` | false, `.jax_cache` | persistent cache |
 | `trend`, `trend_file` | true, empty | trend file switch and path |

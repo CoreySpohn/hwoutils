@@ -6,6 +6,7 @@ see ``hwoutils.testbudget.config.BudgetConfig`` for the keys.
 """
 
 import gc
+import json
 import os
 import sys
 import threading
@@ -40,13 +41,22 @@ def pytest_addoption(parser):
     group.addoption(
         "--budget-report", action="store_true", help="print the full per-test report"
     )
+    group.addoption(
+        "--budget-json",
+        default=None,
+        metavar="PATH",
+        help="write the session summary, per-test records and per-module "
+        "compiles as JSON",
+    )
 
 
 def pytest_configure(config):
     """Create the guard, register markers and start the watchdog."""
-    config.addinivalue_line("markers", "medium: integration test, 30 s default budget")
     config.addinivalue_line(
-        "markers", "slow: production-size test, 300 s default budget"
+        "markers", "medium(reason): integration test, 30 s default budget"
+    )
+    config.addinivalue_line(
+        "markers", "slow(reason): production-size test, 300 s default budget"
     )
     config.addinivalue_line(
         "markers", "time_budget(seconds): override the tier time budget for one test"
@@ -91,7 +101,7 @@ def _testbudget_module(request):
         guard.cfg, name, guard.module_compiles[name], guard.module_compile_s[name]
     )
     guard.module_violations[name] = messages
-    if messages and guard.cfg.mode == "enforce":
+    if messages and guard.cfg.module_enforced():
         raise AssertionError("\n".join(messages))
 
 
@@ -140,6 +150,52 @@ def _tier(item) -> str:
     return "unit"
 
 
+def _has_reason(marker) -> bool:
+    """Return whether a tier mark states why the test is in that tier."""
+    reason = marker.kwargs.get("reason")
+    if reason is None and marker.args:
+        reason = marker.args[0]
+    return isinstance(reason, str) and bool(reason.strip())
+
+
+def _active_fixturedefs(item):
+    """Yield the fixture definitions an item uses, closest override only."""
+    info = getattr(item, "_fixtureinfo", None)
+    if info is None:
+        return
+    for name in item.fixturenames:
+        defs = info.name2fixturedefs.get(name)
+        if defs:
+            yield defs[-1]
+
+
+def fixture_charges(records: list[dict], instances: dict) -> None:
+    """Add each test's share of fixture setup and its total cost to its record.
+
+    A fixture instance's setup time is split equally among the tests that used
+    it; a function-scoped instance has exactly one user. The cost of a test is
+    its call time plus its shares.
+    """
+    users: dict[int, int] = {}
+    for rec in records:
+        for key in rec.get("fixtures", ()):
+            users[key] = users.get(key, 0) + 1
+    for rec in records:
+        share = 0.0
+        heaviest = ("", 0.0)
+        for key in rec.get("fixtures", ()):
+            inst = instances.get(key)
+            if inst is None:
+                continue
+            part = inst["setup_s"] / users[key]
+            share += part
+            if part > heaviest[1]:
+                heaviest = (inst["name"], part)
+        rec["setup_share_s"] = share
+        rec["cost_s"] = rec["call_s"] + share
+        rec["heaviest_fixture"] = heaviest[0]
+
+
 class BudgetGuard:
     """Per-session state: measurements, violations, watchdog and ledger."""
 
@@ -165,6 +221,12 @@ class BudgetGuard:
         self._base_compiles = 0
         self._base_compile_s = 0.0
         self._call_compiles: dict[str, tuple[int, float]] = {}
+        # Fixture instances by serial number and the live serial of each
+        # fixture definition.
+        self._fixture_instances: dict[int, dict] = {}
+        self._live_fixture: dict = {}
+        self._fixture_serial = 0
+        self.fixture_violations: list[str] = []
 
     def start(self) -> None:
         """Install the compile counter, the compilation cache and the watchdog."""
@@ -242,8 +304,36 @@ class BudgetGuard:
         return result
 
     @pytest.hookimpl(wrapper=True)
+    def pytest_fixture_setup(self, fixturedef, request):
+        """Time each fixture instance's setup.
+
+        Fixtures it requests by name are set up before this hook runs and are
+        timed on their own; a fixture it pulls in with ``getfixturevalue`` is
+        part of its time, so that cost cannot leave the tests that use it.
+        """
+        if not self.cfg.charge_fixture_setup:
+            return (yield)
+        start = time.perf_counter()
+        try:
+            return (yield)
+        finally:
+            self._fixture_serial += 1
+            self._fixture_instances[self._fixture_serial] = {
+                "name": fixturedef.argname,
+                "scope": fixturedef.scope,
+                "setup_s": time.perf_counter() - start,
+            }
+            self._live_fixture[fixturedef] = self._fixture_serial
+
+    @pytest.hookimpl(wrapper=True)
     def pytest_runtest_call(self, item):
         """Count compiles that happen during the call phase."""
+        if self.cfg.charge_fixture_setup:
+            item._testbudget_fixtures = [
+                self._live_fixture[fd]
+                for fd in _active_fixturedefs(item)
+                if fd.cached_result is not None and fd in self._live_fixture
+            ]
         before = compiles.compile_count()
         before_s = compiles.compile_seconds()
         try:
@@ -274,11 +364,21 @@ class BudgetGuard:
             "call_s": report.duration,
             "compiles": n_compiles,
             "compile_s": compile_s,
+            "limit_s": limit_s,
+            "passed": report.outcome == "passed",
+            "fixtures": getattr(item, "_testbudget_fixtures", []),
         }
         self.records.append(item._testbudget_record)
         if report.outcome != "passed":
             return report
         problems = []
+        tmarker = item.get_closest_marker(tier) if tier != "unit" else None
+        if self.cfg.require_tier_reason and tmarker and not _has_reason(tmarker):
+            problems.append(
+                f"testbudget: this test's {tier} mark gives no reason; write "
+                f'@pytest.mark.{tier}(reason="...") saying why it cannot be a '
+                "cheaper tier."
+            )
         if report.duration > limit_s:
             problems.append(
                 f"testbudget: this {tier} test took {report.duration:.2f} s, "
@@ -301,15 +401,36 @@ class BudgetGuard:
                 report.longrepr = "\n".join(problems)
         return report
 
+    def judge_fixture_charges(self) -> None:
+        """Charge fixture setup to this process's tests and record violations."""
+        if not self.cfg.charge_fixture_setup:
+            return
+        fixture_charges(self.records, self._fixture_instances)
+        for rec in self.records:
+            limit = rec["limit_s"]
+            if not rec["passed"] or rec["call_s"] > limit or rec["cost_s"] <= limit:
+                continue
+            self.fixture_violations.append(
+                f"{rec['nodeid']}: testbudget: this {rec['tier']} test costs "
+                f"{rec['cost_s']:.2f} s with its share of fixture setup (call "
+                f"{rec['call_s']:.2f} s, fixtures {rec['setup_share_s']:.2f} s, "
+                f"most from {rec['heaviest_fixture']!r}), over its budget of "
+                f"{limit:.1f} s. Share the fixture across tests or move the test "
+                "to a slower tier with a reason."
+            )
+
     def summary(self) -> dict:
         """Return the merged session summary, including worker results under xdist."""
         records = list(self.records)
         peak = peak_rss_bytes()
         n_compiles = compiles.compile_count() - self._base_compiles
         compile_s = compiles.compile_seconds() - self._base_compile_s
-        violations = list(self.violations) + [
-            m for msgs in self.module_violations.values() for m in msgs
-        ]
+        violations = (
+            list(self.violations)
+            + list(self.fixture_violations)
+            + [m for msgs in self.module_violations.values() for m in msgs]
+        )
+        fixture_violations = list(self.fixture_violations)
         module_compiles = dict(self.module_compiles)
         module_compile_s = dict(self.module_compile_s)
         for worker in self.worker_summaries:
@@ -318,12 +439,19 @@ class BudgetGuard:
             n_compiles += worker["compiles"]
             compile_s += worker.get("compile_s", 0.0)
             violations += worker["violations"]
+            violations += worker.get("fixture_violations", [])
+            fixture_violations += worker.get("fixture_violations", [])
             for name, count in worker["module_compiles"].items():
                 module_compiles[name] = module_compiles.get(name, 0) + count
             for name, seconds in worker.get("module_compile_s", {}).items():
                 module_compile_s[name] = module_compile_s.get(name, 0.0) + seconds
+        tiers = {tier: 0 for tier in ("unit", "medium", "slow")}
+        for rec in records:
+            tiers[rec["tier"]] = tiers.get(rec["tier"], 0) + 1
         return {
             "records": records,
+            "tiers": tiers,
+            "fixture_violations": fixture_violations,
             "peak_rss_bytes": peak,
             "compiles": n_compiles,
             "violations": violations,
@@ -342,9 +470,11 @@ class BudgetGuard:
 
     def pytest_sessionfinish(self, session):
         """Hand worker data to the controller, or write the trend line."""
+        self.judge_fixture_charges()
         if hasattr(self.config, "workerinput"):
             self.config.workeroutput["testbudget"] = {
                 "records": self.records,
+                "fixture_violations": self.fixture_violations,
                 "peak_rss_bytes": peak_rss_bytes(),
                 "compiles": compiles.compile_count() - self._base_compiles,
                 "violations": self.violations,
@@ -356,8 +486,17 @@ class BudgetGuard:
         self.final = self.summary()
         if self.worker_summaries:
             self._check_aggregated_modules(session)
+        if (
+            self.final["fixture_violations"]
+            and self.cfg.mode == "enforce"
+            and not session.exitstatus
+        ):
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
         if self.cfg.trend and self.final["records"]:
             self._write_trend(self.final)
+        path = self.config.getoption("budget_json")
+        if path:
+            self._write_json(Path(path), self.final)
 
     def _check_aggregated_modules(self, session) -> None:
         """Judge module budgets on totals summed over xdist workers."""
@@ -366,7 +505,7 @@ class BudgetGuard:
             seconds = final["module_compile_s"].get(name, 0.0)
             messages = module_budget_messages(self.cfg, name, count, seconds)
             final["violations"].extend(messages)
-            if messages and self.cfg.mode == "enforce" and not session.exitstatus:
+            if messages and self.cfg.module_enforced() and not session.exitstatus:
                 session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
     def _write_trend(self, final: dict) -> None:
@@ -385,12 +524,39 @@ class BudgetGuard:
             "compiles": final["compiles"],
             "compile_s": round(final["compile_s"], 2),
             "violations": len(final["violations"]),
+            "tiers": final["tiers"],
             "slowest": [[r["nodeid"], round(r["call_s"], 2)] for r in slowest],
         }
         try:
             trend.append_record(self.cfg.resolved_trend_file(), record)
         except OSError as err:
             sys.stderr.write(f"testbudget: could not write trend file: {err}\n")
+
+    def _write_json(self, path: Path, final: dict) -> None:
+        """Write the merged session summary for tools that set budgets from it."""
+        payload = {
+            "library": self.cfg.library,
+            "sha": trend.git_sha(self.root),
+            "mode": self.cfg.mode,
+            "module_mode": self.cfg.module_mode or self.cfg.mode,
+            "wall_s": final["wall_s"],
+            "peak_rss_gb": final["peak_rss_bytes"] / GB,
+            "compiles": final["compiles"],
+            "compile_s": final["compile_s"],
+            "tiers": final["tiers"],
+            "violations": final["violations"],
+            "module_compiles": final["module_compiles"],
+            "module_compile_s": final["module_compile_s"],
+            "records": [
+                {k: v for k, v in rec.items() if k != "fixtures"}
+                for rec in final["records"]
+            ],
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n")
+        except OSError as err:
+            sys.stderr.write(f"testbudget: could not write {path}: {err}\n")
 
     def pytest_terminal_summary(self, terminalreporter):
         """Print the budget summary after the test results."""
@@ -406,6 +572,11 @@ class BudgetGuard:
             f"compiles={final['compiles']} "
             f"violations={len(final['violations'])} "
             f"compile_s={final['compile_s']:.1f}"
+        )
+        tiers = final["tiers"]
+        write(
+            f"tiers: unit={tiers.get('unit', 0)} medium={tiers.get('medium', 0)} "
+            f"slow={tiers.get('slow', 0)}"
         )
         for line in final["violations"]:
             write(f"  over budget: {line}")
@@ -436,6 +607,16 @@ class BudgetGuard:
         for name, seconds in by_seconds[: TOP_N * 2]:
             count = final["module_compiles"].get(name, 0)
             write(f"  {count:5d}  {seconds:8.1f} s  {name}")
+        charged = [r for r in records if r.get("setup_share_s", 0.0) > 0.0]
+        if charged:
+            write("most fixture setup charged to one test:")
+            for rec in sorted(charged, key=lambda r: r["setup_share_s"], reverse=True)[
+                :TOP_N
+            ]:
+                write(
+                    f"  {rec['setup_share_s']:7.2f} s  ({rec['heaviest_fixture']}) "
+                    f"{rec['nodeid']}"
+                )
         biggest = sorted(records, key=lambda r: r["compiles"], reverse=True)[:TOP_N]
         write("most compiles in one test:")
         for rec in biggest:
