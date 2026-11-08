@@ -66,7 +66,11 @@ empty directory. Trend counts recorded before this accounting are not
 comparable, because a cache hit used to count as 2. The numbers come from the
 JAX monitoring events `/jax/core/compile/backend_compile_duration` (which also
 fires for a cache load) and `/jax/compilation_cache/cache_hits` (which marks
-that load).
+that load). JAX records no event that only a real compile emits, so the plugin
+pairs each cache-hit event with the duration event that follows it on the same
+thread, and resets unpaired hits at the start of every test. The one assumption
+is that other monitoring listeners neither raise nor compile inside a compile;
+a raising listener makes the compiling call raise, so the test errors visibly.
 The summary line ends with `compile_s=`, and `--budget-report` lists compile
 count and seconds per module, top ten by seconds.
 
@@ -77,6 +81,12 @@ count and seconds per module, top ten by seconds.
   in a test module. A module over budget reports an error in the teardown of
   its last test (enforce mode). A jump usually means a numeric value became a
   static jit key.
+- Modules are keyed by their path relative to the pytest rootdir, for example
+  `tests/test_foo.py`, so two files with the same name in different
+  directories keep separate totals. In the `_by_file` mappings a key may be
+  that relative path or the bare file name; the relative path wins when both
+  match. A module that pytest enters more than once (reordered tests) is judged
+  on its cumulative total, the same under xdist.
 - `module_compile_seconds` and `module_compile_seconds_by_file` cap the compile
   seconds in a test module the same way. Count is a weak proxy, since a 0.1 s
   compile and an 18 s compile count the same, so a seconds budget catches a

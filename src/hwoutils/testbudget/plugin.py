@@ -80,15 +80,17 @@ def _testbudget_module(request):
     yield
     used = compiles.compile_count() - before
     used_s = compiles.compile_seconds() - before_s
-    name = Path(str(request.node.path)).name
+    name = request.node.nodeid
     guard.module_compiles[name] = guard.module_compiles.get(name, 0) + used
     guard.module_compile_s[name] = guard.module_compile_s.get(name, 0.0) + used_s
     if guard.cfg.clear_caches:
         clear_jax_caches()
     if hasattr(request.config, "workerinput"):
         return
-    messages = module_budget_messages(guard.cfg, name, used, used_s)
-    guard.module_violations.extend(messages)
+    messages = module_budget_messages(
+        guard.cfg, name, guard.module_compiles[name], guard.module_compile_s[name]
+    )
+    guard.module_violations[name] = messages
     if messages and guard.cfg.mode == "enforce":
         raise AssertionError("\n".join(messages))
 
@@ -100,14 +102,20 @@ def module_budget_messages(cfg, name: str, used: int, used_s: float) -> list[str
     module split across workers is judged on its whole cost.
     """
     messages = []
-    limit = cfg.module_compile_budget_by_file.get(name, cfg.module_compile_budget)
+    base = Path(name).name
+    limit = cfg.module_compile_budget_by_file.get(
+        name, cfg.module_compile_budget_by_file.get(base, cfg.module_compile_budget)
+    )
     if limit and used > limit:
         messages.append(
             f"testbudget: {name} compiled {used} programs, over its budget of {limit}. "
             "A numeric value is probably a static jit key; make it an array, or "
             "build the jitted function once in a fixture."
         )
-    limit_s = cfg.module_compile_seconds_by_file.get(name, cfg.module_compile_seconds)
+    limit_s = cfg.module_compile_seconds_by_file.get(
+        name,
+        cfg.module_compile_seconds_by_file.get(base, cfg.module_compile_seconds),
+    )
     if limit_s and used_s > limit_s:
         messages.append(
             f"testbudget: {name} spent {used_s:.1f} s compiling {used} programs, "
@@ -145,7 +153,7 @@ class BudgetGuard:
             self.cfg = replace(self.cfg, mode=mode)
         self.records: list[dict] = []
         self.violations: list[str] = []
-        self.module_violations: list[str] = []
+        self.module_violations: dict[str, list[str]] = {}
         self.module_compiles: dict[str, int] = {}
         self.module_compile_s: dict[str, float] = {}
         self.worker_summaries: list[dict] = []
@@ -299,7 +307,9 @@ class BudgetGuard:
         peak = peak_rss_bytes()
         n_compiles = compiles.compile_count() - self._base_compiles
         compile_s = compiles.compile_seconds() - self._base_compile_s
-        violations = list(self.violations) + list(self.module_violations)
+        violations = list(self.violations) + [
+            m for msgs in self.module_violations.values() for m in msgs
+        ]
         module_compiles = dict(self.module_compiles)
         module_compile_s = dict(self.module_compile_s)
         for worker in self.worker_summaries:

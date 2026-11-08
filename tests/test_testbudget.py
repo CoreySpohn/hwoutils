@@ -221,6 +221,72 @@ def test_xdist_module_budget_uses_totals_across_workers(project):
     report.stdout.fnmatch_lines(["*violations=1*"])
 
 
+def test_reset_pending_invalidates_other_threads():
+    """Fails if a hit stranded on another thread survives a test boundary."""
+    import threading
+
+    from hwoutils.testbudget import compiles
+
+    stranded, reset, done = threading.Event(), threading.Event(), threading.Event()
+
+    def worker():
+        compiles._on_event(compiles._CACHE_HIT)
+        stranded.set()
+        reset.wait(5)
+        compiles._on_duration(compiles._BACKEND_COMPILE, 1.0)
+        done.set()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    stranded.wait(5)
+    before = compiles.compile_count()
+    compiles.reset_pending()
+    reset.set()
+    done.wait(5)
+    thread.join()
+    assert compiles.compile_count() == before + 1
+
+
+def test_same_basename_in_two_directories_is_two_modules(pytester, tmp_path):
+    """Fails if modules sharing a file name merge into one budget under xdist."""
+    pytest.importorskip("xdist")
+    pytester.makepyprojecttoml(
+        '[project]\nname = "demo"\n[tool.testbudget]\n'
+        f'trend_file = "{tmp_path / "t.jsonl"}"\nrss_poll_s = 0\n'
+        'mode = "enforce"\nmodule_compile_seconds = 3\n'
+        'module_compile_seconds_by_file = {"test_same.py" = 3}\n'
+    )
+    for sub in ("a", "b"):
+        pytester.mkpydir(sub)
+        (pytester.path / sub / "test_same.py").write_text(SPLIT.split("def test_b")[0])
+    result = pytester.runpytest_inprocess(
+        "-p", "hwoutils.testbudget.plugin", "-n", "2", "--dist", "load"
+    )
+    result.assert_outcomes(passed=2)
+    assert result.ret == 0
+
+
+def test_module_revisits_are_judged_cumulatively(pytester, tmp_path):
+    """Fails if a module run in two fixture lifetimes passes on each part alone."""
+    pytester.makepyprojecttoml(
+        '[project]\nname = "demo"\n[tool.testbudget]\n'
+        f'trend_file = "{tmp_path / "t.jsonl"}"\nrss_poll_s = 0\n'
+        'mode = "enforce"\nmodule_compile_seconds = 3\n'
+    )
+    pytester.makeconftest(
+        "def pytest_collection_modifyitems(items):\n"
+        "    order = ['test_a1', 'test_b1', 'test_a2']\n"
+        "    items.sort(key=lambda i: order.index(i.name))\n"
+    )
+    pytester.makepyfile(
+        test_a=SPLIT.replace("test_a", "test_a1").replace("test_b", "test_a2"),
+        test_b="def test_b1():\n    pass\n",
+    )
+    result = pytester.runpytest_inprocess("-p", "hwoutils.testbudget.plugin")
+    result.assert_outcomes(passed=3, errors=1)
+    result.stdout.fnmatch_lines(["*test_a.py spent 4.0 s*"])
+
+
 def test_clear_caches_is_opt_in(project, monkeypatch):
     """Fails if the module fixture clears caches without the config switch."""
     import hwoutils.testbudget.plugin as plugin

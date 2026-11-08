@@ -9,12 +9,23 @@ Events used (names read from jax/_src/dispatch.py and jax/_src/compiler.py):
   wrapped block, on the same thread and before the duration event, only when
   the program was loaded from the persistent cache.
 
-Each cache-hit event adds one to a per-thread pending counter and each duration
-event consumes one pending hit when there is one, so nested loads (a listener
-that loads another cached program) pair correctly. A duration event with no
-pending hit is a real compile and adds one to the count and its duration to the
-seconds. ``reset_pending`` clears the counter at a test boundary so a listener
-that raised cannot strand a hit across tests.
+JAX records no event that only a real backend compile (or only a cache load)
+emits: with the persistent cache off nothing is recorded inside the compile
+path, and ``/jax/compilation_cache/cache_misses`` exists only when the cache is
+on (compilation_cache.py, ``put_executable_and_time``). So the two cases are
+told apart by order: each cache-hit event adds one to a per-thread pending
+counter (compiler.py, ``compile_or_get_cached``, after ``_cache_read``
+succeeds) and the duration event that closes the same block consumes one. A
+duration event with no pending hit is a real compile and adds one to the count
+and its duration to the seconds.
+
+``reset_pending`` bumps a global epoch at each test start, which invalidates the
+pending counter of every thread, so a hit whose duration never arrived cannot
+leak into a later test.
+
+One assumption remains: other monitoring listeners neither raise nor compile
+inside a compile. JAX calls listeners synchronously, so a raising listener
+makes the compiling call itself raise and the test errors visibly.
 """
 
 import threading
@@ -29,13 +40,21 @@ _seconds = 0.0
 _cache_hits = 0
 _installed = False
 _state = threading.local()
+_epoch = 0
+
+
+def _pending() -> int:
+    if getattr(_state, "epoch", -1) != _epoch:
+        _state.epoch = _epoch
+        _state.pending_hits = 0
+    return _state.pending_hits
 
 
 def _on_duration(event: str, duration: float, **kwargs) -> None:
     global _count, _seconds
     if event != _BACKEND_COMPILE:
         return
-    pending = getattr(_state, "pending_hits", 0)
+    pending = _pending()
     if pending > 0:
         _state.pending_hits = pending - 1
         return
@@ -47,12 +66,13 @@ def _on_event(event: str, **kwargs) -> None:
     global _cache_hits
     if event == _CACHE_HIT:
         _cache_hits += 1
-        _state.pending_hits = getattr(_state, "pending_hits", 0) + 1
+        _state.pending_hits = _pending() + 1
 
 
 def reset_pending() -> None:
-    """Forget unpaired cache-hit events on this thread."""
-    _state.pending_hits = 0
+    """Forget unpaired cache-hit events on every thread."""
+    global _epoch
+    _epoch += 1
 
 
 def install() -> None:
