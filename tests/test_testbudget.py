@@ -221,30 +221,36 @@ def test_xdist_module_budget_uses_totals_across_workers(project):
     report.stdout.fnmatch_lines(["*violations=1*"])
 
 
-def test_reset_pending_invalidates_other_threads():
-    """Fails if a hit stranded on another thread survives a test boundary."""
-    import threading
+def test_background_cache_load_spanning_a_test_boundary_is_excluded(project):
+    """Fails if a background cache load spanning a boundary counts as a compile."""
+    body = """
+import threading
+import jax.monitoring
 
-    from hwoutils.testbudget import compiles
+release = threading.Event()
+started = threading.Event()
 
-    stranded, reset, done = threading.Event(), threading.Event(), threading.Event()
+def _load():
+    jax.monitoring.record_event("/jax/compilation_cache/cache_hits")
+    started.set()
+    release.wait(10)
+    jax.monitoring.record_event_duration_secs(
+        "/jax/core/compile/backend_compile_duration", 1.0
+    )
 
-    def worker():
-        compiles._on_event(compiles._CACHE_HIT)
-        stranded.set()
-        reset.wait(5)
-        compiles._on_duration(compiles._BACKEND_COMPILE, 1.0)
-        done.set()
+thread = threading.Thread(target=_load)
 
-    thread = threading.Thread(target=worker)
+def test_a():
     thread.start()
-    stranded.wait(5)
-    before = compiles.compile_count()
-    compiles.reset_pending()
-    reset.set()
-    done.wait(5)
-    thread.join()
-    assert compiles.compile_count() == before + 1
+    assert started.wait(10)
+
+def test_b():
+    release.set()
+    thread.join(10)
+"""
+    result = project("", body)
+    result.assert_outcomes(passed=2)
+    result.stdout.fnmatch_lines(["*compiles=0 violations=0 compile_s=0.0"])
 
 
 def test_same_basename_in_two_directories_is_two_modules(pytester, tmp_path):
@@ -264,6 +270,51 @@ def test_same_basename_in_two_directories_is_two_modules(pytester, tmp_path):
     )
     result.assert_outcomes(passed=2)
     assert result.ret == 0
+
+
+def _two_modules(pytester, tmp_path, table):
+    pytester.makepyprojecttoml(
+        '[project]\nname = "demo"\n[tool.testbudget]\n'
+        f'trend_file = "{tmp_path / "t.jsonl"}"\nrss_poll_s = 0\n{table}\n'
+    )
+    (pytester.path / "sub").mkdir(exist_ok=True)
+    (pytester.path / "sub" / "__init__.py").touch()
+    (pytester.path / "sub" / "test_m.py").write_text(SPLIT)
+    return pytester.runpytest_inprocess("-p", "hwoutils.testbudget.plugin")
+
+
+def test_by_file_key_matches_basename_of_nested_module(pytester, tmp_path):
+    """Fails if a bare file name stops matching a module in a subdirectory."""
+    table = 'mode = "enforce"\nmodule_compile_seconds_by_file = {"test_m.py" = 1}'
+    result = _two_modules(pytester, tmp_path, table)
+    result.assert_outcomes(passed=2, errors=1)
+
+
+def test_by_file_relative_path_wins_over_basename(pytester, tmp_path):
+    """Fails if the bare file name overrides the relative path key."""
+    loose = 'module_compile_seconds_by_file = {"sub/test_m.py" = 10, "test_m.py" = 1}'
+    result = _two_modules(pytester, tmp_path, 'mode = "enforce"\n' + loose)
+    result.assert_outcomes(passed=2)
+    tight = 'module_compile_seconds_by_file = {"sub/test_m.py" = 1, "test_m.py" = 10}'
+    result = _two_modules(pytester, tmp_path, 'mode = "enforce"\n' + tight)
+    result.assert_outcomes(passed=2, errors=1)
+
+
+def test_revisit_violation_is_listed_once(pytester, tmp_path):
+    """Fails if a module checked at two teardowns lists its violation twice."""
+    pytester.makepyprojecttoml(
+        '[project]\nname = "demo"\n[tool.testbudget]\n'
+        f'trend_file = "{tmp_path / "t.jsonl"}"\nrss_poll_s = 0\n'
+        "module_compile_seconds = 1\n"
+    )
+    pytester.makeconftest(
+        "def pytest_collection_modifyitems(items):\n"
+        "    order = ['test_a', 'test_b1', 'test_b']\n"
+        "    items.sort(key=lambda i: order.index(i.name))\n"
+    )
+    pytester.makepyfile(test_a=SPLIT, test_other="def test_b1():\n    pass\n")
+    result = pytester.runpytest_inprocess("-p", "hwoutils.testbudget.plugin")
+    result.stdout.fnmatch_lines(["*violations=1 *"])
 
 
 def test_module_revisits_are_judged_cumulatively(pytester, tmp_path):

@@ -19,13 +19,16 @@ succeeds) and the duration event that closes the same block consumes one. A
 duration event with no pending hit is a real compile and adds one to the count
 and its duration to the seconds.
 
-``reset_pending`` bumps a global epoch at each test start, which invalidates the
-pending counter of every thread, so a hit whose duration never arrived cannot
-leak into a later test.
+``reset_pending`` clears only the calling thread's counter, at each test start
+on the pytest thread, where no compile can be in flight. Other threads are left
+alone because a background cache load may span a test boundary and must still
+pair with its duration.
 
 One assumption remains: other monitoring listeners neither raise nor compile
 inside a compile. JAX calls listeners synchronously, so a raising listener
-makes the compiling call itself raise and the test errors visibly.
+makes the compiling call itself raise and the test errors visibly; it can also
+strand a pending hit on a thread other than the pytest thread, which is not
+cleaned up.
 """
 
 import threading
@@ -40,14 +43,10 @@ _seconds = 0.0
 _cache_hits = 0
 _installed = False
 _state = threading.local()
-_epoch = 0
 
 
 def _pending() -> int:
-    if getattr(_state, "epoch", -1) != _epoch:
-        _state.epoch = _epoch
-        _state.pending_hits = 0
-    return _state.pending_hits
+    return getattr(_state, "pending_hits", 0)
 
 
 def _on_duration(event: str, duration: float, **kwargs) -> None:
@@ -70,9 +69,8 @@ def _on_event(event: str, **kwargs) -> None:
 
 
 def reset_pending() -> None:
-    """Forget unpaired cache-hit events on every thread."""
-    global _epoch
-    _epoch += 1
+    """Forget unpaired cache-hit events on the calling thread."""
+    _state.pending_hits = 0
 
 
 def install() -> None:

@@ -68,9 +68,12 @@ JAX monitoring events `/jax/core/compile/backend_compile_duration` (which also
 fires for a cache load) and `/jax/compilation_cache/cache_hits` (which marks
 that load). JAX records no event that only a real compile emits, so the plugin
 pairs each cache-hit event with the duration event that follows it on the same
-thread, and resets unpaired hits at the start of every test. The one assumption
-is that other monitoring listeners neither raise nor compile inside a compile;
-a raising listener makes the compiling call raise, so the test errors visibly.
+thread, and clears the pytest thread's pending hits at the start of every test. A cache
+load running on a background thread across a test boundary still pairs
+correctly. The one assumption is that other monitoring listeners neither raise
+nor compile inside a compile; a raising listener makes the compiling call
+raise, so the test errors visibly, and it can leave an unpaired hit on a
+background thread, which the plugin does not clean up.
 The summary line ends with `compile_s=`, and `--budget-report` lists compile
 count and seconds per module, top ten by seconds.
 
