@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.12.0](https://github.com/CoreySpohn/hwoutils/compare/v1.11.0...v1.12.0) (2026-11-07)
+
+
+### Features
+
+* **conversions:** MJy/sr and Jy/arcsec^2 surface-brightness conversions ([f291d82](https://github.com/CoreySpohn/hwoutils/commit/f291d827c3ff7384e02b0ce3a1e8c6c470f30b0f))
+
 ## [1.11.0](https://github.com/CoreySpohn/hwoutils/compare/v1.10.0...v1.11.0) (2026-11-05)
 
 
