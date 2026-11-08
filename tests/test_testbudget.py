@@ -109,6 +109,7 @@ def test_a():
     jax.monitoring.record_event_duration_secs(COMPILE, 0.5)
     jax.monitoring.record_event(HIT)
     jax.monitoring.record_event_duration_secs(COMPILE, 9.0)
+    jax.monitoring.record_event_duration_secs(COMPILE, 1.0)
 """
 
 
@@ -117,7 +118,7 @@ def test_compile_seconds_exclude_cache_hits(project):
     result = project("", FAKE_EVENTS, args=("--budget-report",))
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(
-        ["*compiles=2 violations=0 compile_s=2.5", "*2*2.5 s  test_demo.py"]
+        ["*compiles=3 violations=0 compile_s=3.5", "*3*3.5 s  test_demo.py"]
     )
 
 
@@ -133,14 +134,14 @@ def test_module_compile_seconds_fails_in_enforce_mode(project):
     """Fails if a module over its compile-seconds budget is not an error."""
     result = project('mode = "enforce"\nmodule_compile_seconds = 1', FAKE_EVENTS)
     result.assert_outcomes(passed=1, errors=1)
-    result.stdout.fnmatch_lines(["*test_demo.py spent 2.5 s compiling 2 programs*"])
+    result.stdout.fnmatch_lines(["*test_demo.py spent 3.5 s compiling 3 programs*"])
 
 
 def test_module_compile_seconds_only_reported_in_report_mode(project):
     """Fails if report mode changes the outcome of a compile-seconds violation."""
     result = project("module_compile_seconds = 1", FAKE_EVENTS)
     result.assert_outcomes(passed=1)
-    result.stdout.fnmatch_lines(["*violations=1*", "*over budget:*spent 2.5 s*"])
+    result.stdout.fnmatch_lines(["*violations=1*", "*over budget:*spent 3.5 s*"])
 
 
 def test_module_compile_seconds_per_file_override(project):
@@ -151,6 +152,73 @@ def test_module_compile_seconds_per_file_override(project):
     )
     result = project(table, FAKE_EVENTS)
     result.assert_outcomes(passed=1)
+
+
+def test_reentrant_hits_pair_with_their_durations():
+    """Fails if nested cache loads leave a hit unpaired and count a false compile."""
+    from hwoutils.testbudget import compiles
+
+    compiles.reset_pending()
+    before = compiles.compile_count()
+    compiles._on_event(compiles._CACHE_HIT)
+    compiles._on_event(compiles._CACHE_HIT)
+    compiles._on_duration(compiles._BACKEND_COMPILE, 1.0)
+    compiles._on_duration(compiles._BACKEND_COMPILE, 1.0)
+    assert compiles.compile_count() == before
+    compiles._on_duration(compiles._BACKEND_COMPILE, 1.0)
+    assert compiles.compile_count() == before + 1
+
+
+def test_stranded_hit_does_not_leak_across_tests(project):
+    """Fails if a hit whose duration never arrived hides the next test's compile."""
+    body = """
+import jax.monitoring
+
+def test_a():
+    jax.monitoring.record_event("/jax/compilation_cache/cache_hits")
+
+def test_b():
+    jax.monitoring.record_event_duration_secs(
+        "/jax/core/compile/backend_compile_duration", 1.0
+    )
+"""
+    result = project("", body)
+    result.stdout.fnmatch_lines(["*compiles=1 violations=0 compile_s=1.0"])
+
+
+SPLIT = """
+import jax.monitoring
+
+def _compile():
+    jax.monitoring.record_event_duration_secs(
+        "/jax/core/compile/backend_compile_duration", 2.0
+    )
+
+def test_a():
+    _compile()
+
+def test_b():
+    _compile()
+"""
+
+
+def test_xdist_module_budget_uses_totals_across_workers(project):
+    """Fails if a module split over workers is judged on one worker's share."""
+    pytest.importorskip("xdist")
+    table = 'mode = "enforce"\nmodule_compile_seconds = 3\nmodule_compile_budget = 1'
+    serial = project(table, SPLIT)
+    serial.assert_outcomes(passed=2, errors=1)
+    split = project(table, SPLIT, args=("-n", "2", "--dist", "load"))
+    assert split.ret != 0
+    split.stdout.fnmatch_lines(
+        [
+            "*over budget:*test_demo.py compiled 2 programs*",
+            "*over budget:*test_demo.py spent 4.0 s compiling 2 programs*",
+        ]
+    )
+    report = project("module_compile_seconds = 3", SPLIT, args=("-n", "2"))
+    assert report.ret == 0
+    report.stdout.fnmatch_lines(["*violations=1*"])
 
 
 def test_clear_caches_is_opt_in(project, monkeypatch):

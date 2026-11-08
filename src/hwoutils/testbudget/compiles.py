@@ -9,9 +9,12 @@ Events used (names read from jax/_src/dispatch.py and jax/_src/compiler.py):
   wrapped block, on the same thread and before the duration event, only when
   the program was loaded from the persistent cache.
 
-A duration event that follows a cache-hit event on the same thread is a cache
-load and is tallied separately; every other duration event is a real compile
-and adds one to the count and its duration to the seconds.
+Each cache-hit event adds one to a per-thread pending counter and each duration
+event consumes one pending hit when there is one, so nested loads (a listener
+that loads another cached program) pair correctly. A duration event with no
+pending hit is a real compile and adds one to the count and its duration to the
+seconds. ``reset_pending`` clears the counter at a test boundary so a listener
+that raised cannot strand a hit across tests.
 """
 
 import threading
@@ -32,8 +35,9 @@ def _on_duration(event: str, duration: float, **kwargs) -> None:
     global _count, _seconds
     if event != _BACKEND_COMPILE:
         return
-    if getattr(_state, "pending_hit", False):
-        _state.pending_hit = False
+    pending = getattr(_state, "pending_hits", 0)
+    if pending > 0:
+        _state.pending_hits = pending - 1
         return
     _count += 1
     _seconds += float(duration)
@@ -43,7 +47,12 @@ def _on_event(event: str, **kwargs) -> None:
     global _cache_hits
     if event == _CACHE_HIT:
         _cache_hits += 1
-        _state.pending_hit = True
+        _state.pending_hits = getattr(_state, "pending_hits", 0) + 1
+
+
+def reset_pending() -> None:
+    """Forget unpaired cache-hit events on this thread."""
+    _state.pending_hits = 0
 
 
 def install() -> None:

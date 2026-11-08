@@ -81,36 +81,41 @@ def _testbudget_module(request):
     used = compiles.compile_count() - before
     used_s = compiles.compile_seconds() - before_s
     name = Path(str(request.node.path)).name
-    guard.module_compiles[name] = used
-    guard.module_compile_s[name] = used_s
+    guard.module_compiles[name] = guard.module_compiles.get(name, 0) + used
+    guard.module_compile_s[name] = guard.module_compile_s.get(name, 0.0) + used_s
     if guard.cfg.clear_caches:
         clear_jax_caches()
-    limit = guard.cfg.module_compile_budget_by_file.get(
-        name, guard.cfg.module_compile_budget
-    )
+    if hasattr(request.config, "workerinput"):
+        return
+    messages = module_budget_messages(guard.cfg, name, used, used_s)
+    guard.module_violations.extend(messages)
+    if messages and guard.cfg.mode == "enforce":
+        raise AssertionError("\n".join(messages))
+
+
+def module_budget_messages(cfg, name: str, used: int, used_s: float) -> list[str]:
+    """Return the module compile budget violations for one test module.
+
+    Under xdist the controller calls this with totals summed over workers, so a
+    module split across workers is judged on its whole cost.
+    """
+    messages = []
+    limit = cfg.module_compile_budget_by_file.get(name, cfg.module_compile_budget)
     if limit and used > limit:
-        message = (
+        messages.append(
             f"testbudget: {name} compiled {used} programs, over its budget of {limit}. "
             "A numeric value is probably a static jit key; make it an array, or "
-            "build the "
-            "jitted function once in a fixture."
+            "build the jitted function once in a fixture."
         )
-        guard.module_violations.append(message)
-        if guard.cfg.mode == "enforce":
-            raise AssertionError(message)
-    limit_s = guard.cfg.module_compile_seconds_by_file.get(
-        name, guard.cfg.module_compile_seconds
-    )
+    limit_s = cfg.module_compile_seconds_by_file.get(name, cfg.module_compile_seconds)
     if limit_s and used_s > limit_s:
-        message = (
+        messages.append(
             f"testbudget: {name} spent {used_s:.1f} s compiling {used} programs, "
             f"over its budget of {limit_s:.1f} s. Find the expensive programs "
             "with --budget-report; shrink them, share them through a fixture, "
             "or make a static jit key an array."
         )
-        guard.module_violations.append(message)
-        if guard.cfg.mode == "enforce":
-            raise AssertionError(message)
+    return messages
 
 
 def clear_jax_caches() -> None:
@@ -218,6 +223,7 @@ class BudgetGuard:
         """Measure resident-memory growth across setup, call and teardown."""
         self.current_tier = _tier(item)
         self.current_test = item.nodeid
+        compiles.reset_pending()
         rss_before = current_rss_bytes()
         result = yield
         rss_after = current_rss_bytes()
@@ -302,8 +308,10 @@ class BudgetGuard:
             n_compiles += worker["compiles"]
             compile_s += worker.get("compile_s", 0.0)
             violations += worker["violations"]
-            module_compiles.update(worker["module_compiles"])
-            module_compile_s.update(worker.get("module_compile_s", {}))
+            for name, count in worker["module_compiles"].items():
+                module_compiles[name] = module_compiles.get(name, 0) + count
+            for name, seconds in worker.get("module_compile_s", {}).items():
+                module_compile_s[name] = module_compile_s.get(name, 0.0) + seconds
         return {
             "records": records,
             "peak_rss_bytes": peak,
@@ -329,15 +337,27 @@ class BudgetGuard:
                 "records": self.records,
                 "peak_rss_bytes": peak_rss_bytes(),
                 "compiles": compiles.compile_count() - self._base_compiles,
-                "violations": self.violations + self.module_violations,
+                "violations": self.violations,
                 "module_compiles": self.module_compiles,
                 "compile_s": compiles.compile_seconds() - self._base_compile_s,
                 "module_compile_s": self.module_compile_s,
             }
             return
         self.final = self.summary()
+        if self.worker_summaries:
+            self._check_aggregated_modules(session)
         if self.cfg.trend and self.final["records"]:
             self._write_trend(self.final)
+
+    def _check_aggregated_modules(self, session) -> None:
+        """Judge module budgets on totals summed over xdist workers."""
+        final = self.final
+        for name, count in sorted(final["module_compiles"].items()):
+            seconds = final["module_compile_s"].get(name, 0.0)
+            messages = module_budget_messages(self.cfg, name, count, seconds)
+            final["violations"].extend(messages)
+            if messages and self.cfg.mode == "enforce" and not session.exitstatus:
+                session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
     def _write_trend(self, final: dict) -> None:
         slowest = sorted(final["records"], key=lambda r: r["call_s"], reverse=True)[

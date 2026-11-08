@@ -59,11 +59,14 @@ growth reaches `rss_growth_report_mb`.
 
 The plugin counts XLA programs compiled in each test and adds up the backend
 compile seconds. Only real compiles count: a program loaded from the persistent
-cache is excluded from both the count and the seconds, so a warm local run is
-not mistaken for a cheap suite, and a cold run is not mistaken for an expensive
-one. The numbers come from the JAX monitoring events
-`/jax/core/compile/backend_compile_duration` (which also fires for a cache
-load) and `/jax/compilation_cache/cache_hits` (which marks that load).
+cache is excluded from both the count and the seconds. A warm cache therefore
+reports little or no compile cost, so compile budgets are meaningful on a cold
+cache: a cold CI runner, or a run with `TESTBUDGET_CACHE_DIR` pointed at an
+empty directory. Trend counts recorded before this accounting are not
+comparable, because a cache hit used to count as 2. The numbers come from the
+JAX monitoring events `/jax/core/compile/backend_compile_duration` (which also
+fires for a cache load) and `/jax/compilation_cache/cache_hits` (which marks
+that load).
 The summary line ends with `compile_s=`, and `--budget-report` lists compile
 count and seconds per module, top ten by seconds.
 
@@ -80,7 +83,11 @@ count and seconds per module, top ten by seconds.
   regression that adds a few expensive programs. The budget is off by default,
   follows `mode` (reported in `report`, an error in the last test's teardown in
   `enforce`), and is used as written: the plugin applies no scale factor to any
-  budget, so set a looser value for a slower runner.
+  budget, so set a looser value for a slower runner. Under xdist the module
+  counts and seconds are summed over workers and checked once at the end of the
+  session, so a module split across workers is judged on its total; in enforce
+  mode the session then exits nonzero and lists the module under over-budget
+  items, because no test is left to fail.
 
 ## Fixture and compilation cache
 
