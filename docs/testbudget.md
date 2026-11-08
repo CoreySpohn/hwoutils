@@ -63,9 +63,12 @@ fixture shared by thirty tests charges each a thirtieth. Sharing one expensive
 structure across many tests therefore passes, and a fixture built for one test
 does not hide that test's cost.
 
-A fixture's setup time includes any fixture it pulls in with
-`request.getfixturevalue`; fixtures it requests as arguments are set up first
-and charged on their own. The charge is judged when the session ends, because
+A test's fixtures are the ones it resolved: requested as arguments, by other
+fixtures, or by name with `request.getfixturevalue`, including the fixture an
+override chain reaches when a fixture requests its own name. Each fixture is
+charged its own setup time, without the fixtures set up inside it, and a test
+rerun counts as one user. A fixture first set up inside a test body is already
+part of that test's call time and carries no further charge. The charge is judged when the session ends, because
 the number of users is known only then: in enforce mode the session exits
 nonzero and lists each test under over-budget items. `--budget-report` lists
 the tests with the largest fixture charge and the fixture behind it.
@@ -104,10 +107,15 @@ count and seconds per module, top ten by seconds.
 - `@pytest.mark.compile_budget(n)` fails a test that compiles more than `n`
   programs. Use it as a cache-hit test: call a jitted entry point with two
   value-different objects and require one compile.
-- `module_compile_budget` and `module_compile_budget_by_file` cap the compiles
-  in a test module. A module over budget reports an error in the teardown of
-  its last test (enforce mode). A jump usually means a numeric value became a
-  static jit key.
+- `module_compile_budget` and `module_compile_budget_by_file` cap the programs
+  a test module compiles or loads from the persistent compilation cache. A
+  cache load counts as a program, so the count is the same with a warm or a
+  cold cache. A program already compiled in the same process by an earlier
+  module is not counted again; `clear_caches = true` makes each module start
+  empty, so its count no longer depends on which modules ran before it. A
+  module over budget reports an error in the teardown of its last test
+  (enforce mode). A jump usually means a numeric value became a static jit
+  key.
 - Modules are keyed by their path relative to the pytest rootdir, for example
   `tests/test_foo.py`, so two files with the same name in different
   directories keep separate totals. In the `_by_file` mappings a key may be
@@ -134,9 +142,12 @@ them to `enforce`.
 ## Session JSON
 
 `--budget-json PATH` writes the merged session summary as JSON: totals, test
-counts per tier, violations, compile counts and seconds per module, and one
-record per test (tier, call time, compiles, compile seconds and, with fixture
-charging on, the fixture share and total cost). Under xdist the controller
+counts per tier, violations, compile counts, compile seconds and cache loads
+per module, and one
+record per test attempt that reached its call phase (tier, call time,
+compiles, compile seconds and, with fixture charging on, the fixture share and
+total cost). A test skipped or failed in setup has no record and is not in the
+tier counts; a rerun test has one record per attempt and counts once. Under xdist the controller
 writes it with the workers' figures summed. Budgets can be set from this file
 after a run on the machine that enforces them.
 
@@ -179,7 +190,7 @@ All keys live under `[tool.testbudget]`. An unknown key is an error.
 | `slow_rss_ceiling_gb` | 0 | ceiling during slow tests; 0 means the same as above |
 | `rss_poll_s` | 0.5 | watchdog period |
 | `rss_growth_report_mb` | 500 | growth threshold for the report |
-| `module_compile_budget` | 0 | compiles per module; 0 disables |
+| `module_compile_budget` | 0 | programs compiled or loaded per module; 0 disables |
 | `module_compile_budget_by_file` | empty | per-file overrides |
 | `module_compile_seconds` | 0 | compile seconds per module; 0 disables |
 | `module_compile_seconds_by_file` | empty | per-file overrides |

@@ -27,8 +27,9 @@ class BudgetConfig:
         rss_poll_s: Watchdog polling period, seconds.
         rss_growth_report_mb: Tests that grow resident memory by at least this
             much are listed in the report.
-        module_compile_budget: Maximum compiles in one test module. Zero
-            disables the check.
+        module_compile_budget: Maximum programs one test module compiles or
+            loads from the persistent compilation cache, so the count does not
+            depend on whether the cache is warm. Zero disables the check.
         module_compile_budget_by_file: Per-file overrides keyed by file name.
         module_compile_seconds: Maximum backend compile seconds in one test
             module, real compiles only (persistent-cache loads are excluded).

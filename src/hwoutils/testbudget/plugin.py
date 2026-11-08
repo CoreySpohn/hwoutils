@@ -87,26 +87,39 @@ def _testbudget_module(request):
         return
     before = compiles.compile_count()
     before_s = compiles.compile_seconds()
+    before_loads = compiles.cache_hit_count()
     yield
     used = compiles.compile_count() - before
     used_s = compiles.compile_seconds() - before_s
+    loads = compiles.cache_hit_count() - before_loads
     name = request.node.nodeid
     guard.module_compiles[name] = guard.module_compiles.get(name, 0) + used
     guard.module_compile_s[name] = guard.module_compile_s.get(name, 0.0) + used_s
+    guard.module_cache_loads[name] = guard.module_cache_loads.get(name, 0) + loads
     if guard.cfg.clear_caches:
         clear_jax_caches()
     if hasattr(request.config, "workerinput"):
         return
     messages = module_budget_messages(
-        guard.cfg, name, guard.module_compiles[name], guard.module_compile_s[name]
+        guard.cfg,
+        name,
+        guard.module_compiles[name],
+        guard.module_compile_s[name],
+        guard.module_cache_loads[name],
     )
     guard.module_violations[name] = messages
     if messages and guard.cfg.module_enforced():
         raise AssertionError("\n".join(messages))
 
 
-def module_budget_messages(cfg, name: str, used: int, used_s: float) -> list[str]:
+def module_budget_messages(
+    cfg, name: str, used: int, used_s: float, loads: int = 0
+) -> list[str]:
     """Return the module compile budget violations for one test module.
+
+    The count budget is on programs compiled or loaded from the persistent
+    compilation cache, so it does not depend on whether the cache is warm. The
+    seconds budget is on real compiles only.
 
     Under xdist the controller calls this with totals summed over workers, so a
     module split across workers is judged on its whole cost.
@@ -116,9 +129,11 @@ def module_budget_messages(cfg, name: str, used: int, used_s: float) -> list[str
     limit = cfg.module_compile_budget_by_file.get(
         name, cfg.module_compile_budget_by_file.get(base, cfg.module_compile_budget)
     )
-    if limit and used > limit:
+    if limit and used + loads > limit:
+        detail = f" ({loads} from the cache)" if loads else ""
         messages.append(
-            f"testbudget: {name} compiled {used} programs, over its budget of {limit}. "
+            f"testbudget: {name} compiled {used + loads} programs{detail}, over its "
+            f"budget of {limit}. "
             "A numeric value is probably a static jit key; make it an array, or "
             "build the jitted function once in a fixture."
         )
@@ -158,28 +173,51 @@ def _has_reason(marker) -> bool:
     return isinstance(reason, str) and bool(reason.strip())
 
 
-def _active_fixturedefs(item):
-    """Yield the fixture definitions an item uses, closest override only."""
-    info = getattr(item, "_fixtureinfo", None)
-    if info is None:
-        return
-    for name in item.fixturenames:
-        defs = info.name2fixturedefs.get(name)
-        if defs:
-            yield defs[-1]
+def _resolved_fixturedefs(item):
+    """Return the fixture definitions an item resolved, override parents included.
+
+    The item's top request records every fixture resolved for it: requested as
+    an argument, by another fixture, or by name with ``getfixturevalue`` in a
+    fixture or in the test body. An overriding fixture that requests its own
+    name uses the definition it overrides, which the request does not record,
+    so the chain is walked up. Items without a request (doctests, other
+    non-Python items) fall back to their static fixture names.
+    """
+    request = getattr(item, "_request", None) or getattr(item, "fixture_request", None)
+    defs = list(getattr(request, "_fixture_defs", {}).values())
+    if request is None:
+        info = getattr(item, "_fixtureinfo", None)
+        if info is not None:
+            for name in getattr(item, "fixturenames", ()):
+                found = info.name2fixturedefs.get(name)
+                if found:
+                    defs.append(found[-1])
+    manager = item.session._fixturemanager
+    seen = []
+    for fd in defs:
+        while fd is not None and fd not in seen:
+            seen.append(fd)
+            if fd.argname not in fd.argnames:
+                break
+            chain = list(manager.getfixturedefs(fd.argname, item) or ())
+            position = chain.index(fd) if fd in chain else 0
+            fd = chain[position - 1] if position > 0 else None
+    return seen
 
 
 def fixture_charges(records: list[dict], instances: dict) -> None:
     """Add each test's share of fixture setup and its total cost to its record.
 
-    A fixture instance's setup time is split equally among the tests that used
-    it; a function-scoped instance has exactly one user. The cost of a test is
-    its call time plus its shares.
+    A fixture instance's setup time is split equally among the distinct tests
+    that used it, so a rerun of one test does not dilute its share; a
+    function-scoped instance has exactly one user. An instance set up inside a
+    call phase carries no charge, because its time is already in that call.
+    The cost of a test is its call time plus its shares.
     """
-    users: dict[int, int] = {}
+    users: dict[int, set] = {}
     for rec in records:
         for key in rec.get("fixtures", ()):
-            users[key] = users.get(key, 0) + 1
+            users.setdefault(key, set()).add(rec["nodeid"])
     for rec in records:
         share = 0.0
         heaviest = ("", 0.0)
@@ -187,7 +225,7 @@ def fixture_charges(records: list[dict], instances: dict) -> None:
             inst = instances.get(key)
             if inst is None:
                 continue
-            part = inst["setup_s"] / users[key]
+            part = inst["setup_s"] / len(users[key])
             share += part
             if part > heaviest[1]:
                 heaviest = (inst["name"], part)
@@ -212,6 +250,7 @@ class BudgetGuard:
         self.module_violations: dict[str, list[str]] = {}
         self.module_compiles: dict[str, int] = {}
         self.module_compile_s: dict[str, float] = {}
+        self.module_cache_loads: dict[str, int] = {}
         self.worker_summaries: list[dict] = []
         self.current_tier = "unit"
         self.current_test = ""
@@ -226,6 +265,8 @@ class BudgetGuard:
         self._fixture_instances: dict[int, dict] = {}
         self._live_fixture: dict = {}
         self._fixture_serial = 0
+        self._fixture_stack: list[list[float]] = []
+        self._in_call = False
         self.fixture_violations: list[str] = []
 
     def start(self) -> None:
@@ -294,6 +335,7 @@ class BudgetGuard:
         self.current_tier = _tier(item)
         self.current_test = item.nodeid
         compiles.reset_pending()
+        item._testbudget_record = None
         rss_before = current_rss_bytes()
         result = yield
         rss_after = current_rss_bytes()
@@ -305,40 +347,54 @@ class BudgetGuard:
 
     @pytest.hookimpl(wrapper=True)
     def pytest_fixture_setup(self, fixturedef, request):
-        """Time each fixture instance's setup.
+        """Time each fixture instance's own setup.
 
-        Fixtures it requests by name are set up before this hook runs and are
-        timed on their own; a fixture it pulls in with ``getfixturevalue`` is
-        part of its time, so that cost cannot leave the tests that use it.
+        Fixtures it requests as arguments are set up before this hook runs; a
+        fixture it pulls in with ``getfixturevalue`` is set up inside it, so
+        that nested time is subtracted here and charged to the nested fixture,
+        which the test's request records as used.
         """
         if not self.cfg.charge_fixture_setup:
             return (yield)
+        self._fixture_stack.append([0.0])
         start = time.perf_counter()
         try:
             return (yield)
         finally:
+            elapsed = time.perf_counter() - start
+            nested = self._fixture_stack.pop()[0]
+            if self._fixture_stack:
+                self._fixture_stack[-1][0] += elapsed
             self._fixture_serial += 1
             self._fixture_instances[self._fixture_serial] = {
                 "name": fixturedef.argname,
                 "scope": fixturedef.scope,
-                "setup_s": time.perf_counter() - start,
+                "setup_s": 0.0 if self._in_call else max(elapsed - nested, 0.0),
             }
             self._live_fixture[fixturedef] = self._fixture_serial
 
     @pytest.hookimpl(wrapper=True)
-    def pytest_runtest_call(self, item):
-        """Count compiles that happen during the call phase."""
-        if self.cfg.charge_fixture_setup:
-            item._testbudget_fixtures = [
+    def pytest_runtest_teardown(self, item, nextitem):
+        """Record the fixture instances the test used, before any is torn down."""
+        record = getattr(item, "_testbudget_record", None)
+        if self.cfg.charge_fixture_setup and record is not None:
+            record["fixtures"] = [
                 self._live_fixture[fd]
-                for fd in _active_fixturedefs(item)
+                for fd in _resolved_fixturedefs(item)
                 if fd.cached_result is not None and fd in self._live_fixture
             ]
+        return (yield)
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_runtest_call(self, item):
+        """Count compiles that happen during the call phase."""
         before = compiles.compile_count()
         before_s = compiles.compile_seconds()
+        self._in_call = True
         try:
             return (yield)
         finally:
+            self._in_call = False
             self._call_compiles[item.nodeid] = (
                 compiles.compile_count() - before,
                 compiles.compile_seconds() - before_s,
@@ -366,7 +422,7 @@ class BudgetGuard:
             "compile_s": compile_s,
             "limit_s": limit_s,
             "passed": report.outcome == "passed",
-            "fixtures": getattr(item, "_testbudget_fixtures", []),
+            "fixtures": [],
         }
         self.records.append(item._testbudget_record)
         if report.outcome != "passed":
@@ -433,6 +489,7 @@ class BudgetGuard:
         fixture_violations = list(self.fixture_violations)
         module_compiles = dict(self.module_compiles)
         module_compile_s = dict(self.module_compile_s)
+        module_cache_loads = dict(self.module_cache_loads)
         for worker in self.worker_summaries:
             records += worker["records"]
             peak = max(peak, worker["peak_rss_bytes"])
@@ -445,9 +502,11 @@ class BudgetGuard:
                 module_compiles[name] = module_compiles.get(name, 0) + count
             for name, seconds in worker.get("module_compile_s", {}).items():
                 module_compile_s[name] = module_compile_s.get(name, 0.0) + seconds
+            for name, count in worker.get("module_cache_loads", {}).items():
+                module_cache_loads[name] = module_cache_loads.get(name, 0) + count
         tiers = {tier: 0 for tier in ("unit", "medium", "slow")}
-        for rec in records:
-            tiers[rec["tier"]] = tiers.get(rec["tier"], 0) + 1
+        for tier in {rec["nodeid"]: rec["tier"] for rec in records}.values():
+            tiers[tier] = tiers.get(tier, 0) + 1
         return {
             "records": records,
             "tiers": tiers,
@@ -458,6 +517,7 @@ class BudgetGuard:
             "module_compiles": module_compiles,
             "compile_s": compile_s,
             "module_compile_s": module_compile_s,
+            "module_cache_loads": module_cache_loads,
             "wall_s": time.perf_counter() - self.start_time,
         }
 
@@ -481,6 +541,7 @@ class BudgetGuard:
                 "module_compiles": self.module_compiles,
                 "compile_s": compiles.compile_seconds() - self._base_compile_s,
                 "module_compile_s": self.module_compile_s,
+                "module_cache_loads": self.module_cache_loads,
             }
             return
         self.final = self.summary()
@@ -503,7 +564,8 @@ class BudgetGuard:
         final = self.final
         for name, count in sorted(final["module_compiles"].items()):
             seconds = final["module_compile_s"].get(name, 0.0)
-            messages = module_budget_messages(self.cfg, name, count, seconds)
+            loads = final["module_cache_loads"].get(name, 0)
+            messages = module_budget_messages(self.cfg, name, count, seconds, loads)
             final["violations"].extend(messages)
             if messages and self.cfg.module_enforced() and not session.exitstatus:
                 session.exitstatus = pytest.ExitCode.TESTS_FAILED
@@ -547,6 +609,7 @@ class BudgetGuard:
             "violations": final["violations"],
             "module_compiles": final["module_compiles"],
             "module_compile_s": final["module_compile_s"],
+            "module_cache_loads": final["module_cache_loads"],
             "records": [
                 {k: v for k, v in rec.items() if k != "fixtures"}
                 for rec in final["records"]

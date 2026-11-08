@@ -532,7 +532,7 @@ def test_fixture_pulled_in_by_name_lookup_is_charged(project):
     table = 'mode = "enforce"\nunit_s = 0.2\ncharge_fixture_setup = true'
     result = project(table, DYNAMIC_FIXTURE)
     assert result.ret != 0
-    result.stdout.fnmatch_lines(["*test_uses_outer*'outer'*"])
+    result.stdout.fnmatch_lines(["*test_uses_outer*'inner'*"])
 
 
 def test_xdist_fixture_charge_fails_the_session(project):
@@ -602,3 +602,149 @@ def test_budget_json_and_tier_counts(project, tmp_path):
     assert "fixtures" not in data["records"][0]
     trend_line = json.loads(project.trend_file.read_text().splitlines()[-1])
     assert trend_line["tiers"] == {"unit": 1, "medium": 2, "slow": 1}
+
+
+CHARGED = 'mode = "enforce"\nunit_s = 0.2\ncharge_fixture_setup = true'
+
+
+def _charges(project, tmp_path, body):
+    out = tmp_path / "charges.json"
+    result = project(
+        CHARGED, body, args=("--budget-json", str(out), "-p", "no:randomly")
+    )
+    records = json.loads(out.read_text())["records"]
+    return result, {r["nodeid"].split("::")[-1]: r["setup_share_s"] for r in records}
+
+
+OVERRIDE_CHAIN = """
+import time
+import pytest
+
+@pytest.fixture
+def costly():
+    time.sleep(0.4)
+
+class TestChild:
+    @pytest.fixture
+    def costly(self, costly):
+        return 1
+
+    def test_uses_child(self, costly):
+        pass
+"""
+
+
+def test_override_parent_setup_is_charged(project, tmp_path):
+    """Fails if a fixture overriding its own name hides the parent's setup."""
+    result, shares = _charges(project, tmp_path, OVERRIDE_CHAIN)
+    assert result.ret != 0
+    assert shares["test_uses_child"] > 0.35
+
+
+NESTED_BOTH_NAMED = """
+import time
+import pytest
+
+@pytest.fixture
+def inner():
+    time.sleep(0.3)
+
+@pytest.fixture
+def outer(request):
+    request.getfixturevalue("inner")
+
+def test_both(outer, inner):
+    pass
+"""
+
+
+def test_nested_dynamic_setup_is_charged_once(project, tmp_path):
+    """Fails if a fixture set up inside another is charged twice to one test."""
+    _, shares = _charges(project, tmp_path, NESTED_BOTH_NAMED)
+    assert 0.25 < shares["test_both"] < 0.45
+
+
+SHARED_INNER = """
+import time
+import pytest
+
+@pytest.fixture(scope="module")
+def inner():
+    time.sleep(0.3)
+
+@pytest.fixture
+def outer(request):
+    request.getfixturevalue("inner")
+
+def test_a(outer):
+    pass
+
+def test_b(outer):
+    pass
+"""
+
+
+def test_shared_inner_behind_dynamic_wrappers_is_split(project, tmp_path):
+    """Fails if a shared fixture reached by name lookup charges only its first user."""
+    result, shares = _charges(project, tmp_path, SHARED_INNER)
+    assert result.ret == 0
+    assert shares["test_a"] == pytest.approx(shares["test_b"], abs=0.05)
+    assert 0.1 < shares["test_a"] < 0.19
+
+
+BODY_LOOKUP = """
+import time
+import pytest
+
+@pytest.fixture(scope="module")
+def costly():
+    time.sleep(0.3)
+
+def test_first(request):
+    request.getfixturevalue("costly")
+
+def test_second(costly):
+    pass
+"""
+
+
+def test_fixture_set_up_in_a_test_body_is_not_charged_again(project, tmp_path):
+    """Fails if setup already inside one test's call time is charged to another."""
+    _, shares = _charges(project, tmp_path, BODY_LOOKUP)
+    assert shares["test_second"] < 0.05
+
+
+def test_rerun_attempts_count_as_one_user():
+    """Fails if two attempts of one test halve that test's fixture share."""
+    from hwoutils.testbudget.plugin import fixture_charges
+
+    records = [
+        {"nodeid": "t.py::a", "call_s": 0.0, "fixtures": [1]},
+        {"nodeid": "t.py::a", "call_s": 0.0, "fixtures": [1]},
+    ]
+    fixture_charges(records, {1: {"name": "f", "scope": "module", "setup_s": 0.3}})
+    assert [r["setup_share_s"] for r in records] == [0.3, 0.3]
+
+
+def test_items_with_a_fixture_request_attribute_are_charged():
+    """Fails if an item that keeps its request as fixture_request is skipped."""
+    from types import SimpleNamespace
+
+    from hwoutils.testbudget.plugin import _resolved_fixturedefs
+
+    fd = SimpleNamespace(argname="costly", argnames=())
+    request = SimpleNamespace(_fixture_defs={"costly": fd})
+    item = SimpleNamespace(
+        fixture_request=request, session=SimpleNamespace(_fixturemanager=None)
+    )
+    assert _resolved_fixturedefs(item) == [fd]
+
+
+def test_module_program_budget_counts_cache_loads(project, tmp_path):
+    """Fails if a warm cache lets a module pass a program budget it fails cold."""
+    out = tmp_path / "loads.json"
+    table = 'mode = "enforce"\nmodule_compile_budget = 3'
+    result = project(table, FAKE_EVENTS, args=("--budget-json", str(out)))
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(["*compiled 4 programs (1 from the cache)*"])
+    assert json.loads(out.read_text())["module_cache_loads"] == {"test_demo.py": 1}
