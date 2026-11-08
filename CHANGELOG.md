@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.14.0](https://github.com/CoreySpohn/hwoutils/compare/v1.13.0...v1.14.0) (2026-11-08)
+
+
+### Features
+
+* **testbudget:** charge fixture setup to its users, module mode, tier reasons, session JSON ([eec97f2](https://github.com/CoreySpohn/hwoutils/commit/eec97f2be6441b834fe749afd780f928d6cc53ca))
+
+
+### Bug Fixes
+
+* **testbudget:** charge the fixtures a test resolved, count cache loads in module program budgets ([85f0d91](https://github.com/CoreySpohn/hwoutils/commit/85f0d91a6bba1e721c3b56c9ef63cb2a49ee9da8))
+* **testbudget:** link fixtures a setup looks up while cached to the fixture that looked them up ([761c9a1](https://github.com/CoreySpohn/hwoutils/commit/761c9a1a02dd3ca922aabc7776f1eccaf4573db9))
+* **testbudget:** share fixtures set up inside other fixtures, snapshot users at call end, count loads when they close ([1dee427](https://github.com/CoreySpohn/hwoutils/commit/1dee4273f59c17f64abc8039d0bc2b28a8f5e9a1))
+
 ## [1.13.0](https://github.com/CoreySpohn/hwoutils/compare/v1.12.0...v1.13.0) (2026-11-08)
 
 
