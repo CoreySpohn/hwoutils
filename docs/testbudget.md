@@ -57,8 +57,15 @@ growth reaches `rss_growth_report_mb`.
 
 ## Compiles
 
-The plugin counts XLA programs compiled in each test (with the persistent cache
-on, cache hits count as well, so the number does not depend on cache state).
+The plugin counts XLA programs compiled in each test and adds up the backend
+compile seconds. Only real compiles count: a program loaded from the persistent
+cache is excluded from both the count and the seconds, so a warm local run is
+not mistaken for a cheap suite, and a cold run is not mistaken for an expensive
+one. The numbers come from the JAX monitoring events
+`/jax/core/compile/backend_compile_duration` (which also fires for a cache
+load) and `/jax/compilation_cache/cache_hits` (which marks that load).
+The summary line ends with `compile_s=`, and `--budget-report` lists compile
+count and seconds per module, top ten by seconds.
 
 - `@pytest.mark.compile_budget(n)` fails a test that compiles more than `n`
   programs. Use it as a cache-hit test: call a jitted entry point with two
@@ -67,6 +74,13 @@ on, cache hits count as well, so the number does not depend on cache state).
   in a test module. A module over budget reports an error in the teardown of
   its last test (enforce mode). A jump usually means a numeric value became a
   static jit key.
+- `module_compile_seconds` and `module_compile_seconds_by_file` cap the compile
+  seconds in a test module the same way. Count is a weak proxy, since a 0.1 s
+  compile and an 18 s compile count the same, so a seconds budget catches a
+  regression that adds a few expensive programs. The budget is off by default,
+  follows `mode` (reported in `report`, an error in the last test's teardown in
+  `enforce`), and is used as written: the plugin applies no scale factor to any
+  budget, so set a looser value for a slower runner.
 
 ## Fixture and compilation cache
 
@@ -80,7 +94,7 @@ overrides the directory.
 ## Trend file
 
 Each session appends a JSON line (library, commit, invocation, tests, wall
-time, peak resident GB, compiles, violations, slowest five) to
+time, peak resident GB, compiles, compile seconds, violations, slowest five) to
 `~/hwo-data/testbudget/<library>.jsonl`. `trend_file` or
 `TESTBUDGET_TREND_FILE` changes the path, and `trend = false` turns it off.
 
@@ -108,6 +122,8 @@ All keys live under `[tool.testbudget]`. An unknown key is an error.
 | `rss_growth_report_mb` | 500 | growth threshold for the report |
 | `module_compile_budget` | 0 | compiles per module; 0 disables |
 | `module_compile_budget_by_file` | empty | per-file overrides |
+| `module_compile_seconds` | 0 | compile seconds per module; 0 disables |
+| `module_compile_seconds_by_file` | empty | per-file overrides |
 | `clear_caches` | false | clear JAX caches after each module |
 | `compile_cache`, `compile_cache_dir` | false, `.jax_cache` | persistent cache |
 | `trend`, `trend_file` | true, empty | trend file switch and path |

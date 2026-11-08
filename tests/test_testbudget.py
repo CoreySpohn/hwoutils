@@ -98,6 +98,61 @@ def test_a():
     result.stdout.fnmatch_lines(["*test_demo.py compiled * programs*"])
 
 
+FAKE_EVENTS = """
+import jax.monitoring
+
+COMPILE = "/jax/core/compile/backend_compile_duration"
+HIT = "/jax/compilation_cache/cache_hits"
+
+def test_a():
+    jax.monitoring.record_event_duration_secs(COMPILE, 2.0)
+    jax.monitoring.record_event_duration_secs(COMPILE, 0.5)
+    jax.monitoring.record_event(HIT)
+    jax.monitoring.record_event_duration_secs(COMPILE, 9.0)
+"""
+
+
+def test_compile_seconds_exclude_cache_hits(project):
+    """Fails if a cache load is counted as a compile or its time is added."""
+    result = project("", FAKE_EVENTS, args=("--budget-report",))
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(
+        ["*compiles=2 violations=0 compile_s=2.5", "*2*2.5 s  test_demo.py"]
+    )
+
+
+def test_summary_line_keeps_field_order_and_appends_compile_s(project):
+    """Fails if compile_s is not appended after the existing summary fields."""
+    result = project("", "def test_a():\n    pass\n")
+    result.stdout.fnmatch_lines(
+        ["mode=report tests=1 wall=*s peak_rss=*GB compiles=* violations=0 compile_s=*"]
+    )
+
+
+def test_module_compile_seconds_fails_in_enforce_mode(project):
+    """Fails if a module over its compile-seconds budget is not an error."""
+    result = project('mode = "enforce"\nmodule_compile_seconds = 1', FAKE_EVENTS)
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(["*test_demo.py spent 2.5 s compiling 2 programs*"])
+
+
+def test_module_compile_seconds_only_reported_in_report_mode(project):
+    """Fails if report mode changes the outcome of a compile-seconds violation."""
+    result = project("module_compile_seconds = 1", FAKE_EVENTS)
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(["*violations=1*", "*over budget:*spent 2.5 s*"])
+
+
+def test_module_compile_seconds_per_file_override(project):
+    """Fails if the per-file value does not override the global budget."""
+    table = (
+        'mode = "enforce"\nmodule_compile_seconds = 1\n'
+        'module_compile_seconds_by_file = {"test_demo.py" = 10}'
+    )
+    result = project(table, FAKE_EVENTS)
+    result.assert_outcomes(passed=1)
+
+
 def test_clear_caches_is_opt_in(project, monkeypatch):
     """Fails if the module fixture clears caches without the config switch."""
     import hwoutils.testbudget.plugin as plugin

@@ -76,10 +76,13 @@ def _testbudget_module(request):
         yield
         return
     before = compiles.compile_count()
+    before_s = compiles.compile_seconds()
     yield
     used = compiles.compile_count() - before
+    used_s = compiles.compile_seconds() - before_s
     name = Path(str(request.node.path)).name
     guard.module_compiles[name] = used
+    guard.module_compile_s[name] = used_s
     if guard.cfg.clear_caches:
         clear_jax_caches()
     limit = guard.cfg.module_compile_budget_by_file.get(
@@ -91,6 +94,19 @@ def _testbudget_module(request):
             "A numeric value is probably a static jit key; make it an array, or "
             "build the "
             "jitted function once in a fixture."
+        )
+        guard.module_violations.append(message)
+        if guard.cfg.mode == "enforce":
+            raise AssertionError(message)
+    limit_s = guard.cfg.module_compile_seconds_by_file.get(
+        name, guard.cfg.module_compile_seconds
+    )
+    if limit_s and used_s > limit_s:
+        message = (
+            f"testbudget: {name} spent {used_s:.1f} s compiling {used} programs, "
+            f"over its budget of {limit_s:.1f} s. Find the expensive programs "
+            "with --budget-report; shrink them, share them through a fixture, "
+            "or make a static jit key an array."
         )
         guard.module_violations.append(message)
         if guard.cfg.mode == "enforce":
@@ -126,17 +142,22 @@ class BudgetGuard:
         self.violations: list[str] = []
         self.module_violations: list[str] = []
         self.module_compiles: dict[str, int] = {}
+        self.module_compile_s: dict[str, float] = {}
         self.worker_summaries: list[dict] = []
         self.current_tier = "unit"
         self.current_test = ""
         self.start_time = time.perf_counter()
         self._stop = threading.Event()
         self._thread = None
-        self._call_compiles: dict[str, int] = {}
+        self._base_compiles = 0
+        self._base_compile_s = 0.0
+        self._call_compiles: dict[str, tuple[int, float]] = {}
 
     def start(self) -> None:
         """Install the compile counter, the compilation cache and the watchdog."""
         compiles.install()
+        self._base_compiles = compiles.compile_count()
+        self._base_compile_s = compiles.compile_seconds()
         if self.cfg.compile_cache:
             self._enable_compile_cache()
         if self.cfg.rss_ceiling_gb > 0 and self.cfg.rss_poll_s > 0:
@@ -210,10 +231,14 @@ class BudgetGuard:
     def pytest_runtest_call(self, item):
         """Count compiles that happen during the call phase."""
         before = compiles.compile_count()
+        before_s = compiles.compile_seconds()
         try:
             return (yield)
         finally:
-            self._call_compiles[item.nodeid] = compiles.compile_count() - before
+            self._call_compiles[item.nodeid] = (
+                compiles.compile_count() - before,
+                compiles.compile_seconds() - before_s,
+            )
 
     @pytest.hookimpl(wrapper=True)
     def pytest_runtest_makereport(self, item, call):
@@ -222,7 +247,7 @@ class BudgetGuard:
         if call.when != "call":
             return report
         tier = _tier(item)
-        n_compiles = self._call_compiles.pop(item.nodeid, 0)
+        n_compiles, compile_s = self._call_compiles.pop(item.nodeid, (0, 0.0))
         marker = item.get_closest_marker("time_budget")
         limit_s = (
             float(marker.args[0])
@@ -234,6 +259,7 @@ class BudgetGuard:
             "tier": tier,
             "call_s": report.duration,
             "compiles": n_compiles,
+            "compile_s": compile_s,
         }
         self.records.append(item._testbudget_record)
         if report.outcome != "passed":
@@ -265,21 +291,27 @@ class BudgetGuard:
         """Return the merged session summary, including worker results under xdist."""
         records = list(self.records)
         peak = peak_rss_bytes()
-        n_compiles = compiles.compile_count()
+        n_compiles = compiles.compile_count() - self._base_compiles
+        compile_s = compiles.compile_seconds() - self._base_compile_s
         violations = list(self.violations) + list(self.module_violations)
         module_compiles = dict(self.module_compiles)
+        module_compile_s = dict(self.module_compile_s)
         for worker in self.worker_summaries:
             records += worker["records"]
             peak = max(peak, worker["peak_rss_bytes"])
             n_compiles += worker["compiles"]
+            compile_s += worker.get("compile_s", 0.0)
             violations += worker["violations"]
             module_compiles.update(worker["module_compiles"])
+            module_compile_s.update(worker.get("module_compile_s", {}))
         return {
             "records": records,
             "peak_rss_bytes": peak,
             "compiles": n_compiles,
             "violations": violations,
             "module_compiles": module_compiles,
+            "compile_s": compile_s,
+            "module_compile_s": module_compile_s,
             "wall_s": time.perf_counter() - self.start_time,
         }
 
@@ -296,9 +328,11 @@ class BudgetGuard:
             self.config.workeroutput["testbudget"] = {
                 "records": self.records,
                 "peak_rss_bytes": peak_rss_bytes(),
-                "compiles": compiles.compile_count(),
+                "compiles": compiles.compile_count() - self._base_compiles,
                 "violations": self.violations + self.module_violations,
                 "module_compiles": self.module_compiles,
+                "compile_s": compiles.compile_seconds() - self._base_compile_s,
+                "module_compile_s": self.module_compile_s,
             }
             return
         self.final = self.summary()
@@ -319,6 +353,7 @@ class BudgetGuard:
             "wall_s": round(final["wall_s"], 2),
             "peak_rss_gb": round(final["peak_rss_bytes"] / GB, 3),
             "compiles": final["compiles"],
+            "compile_s": round(final["compile_s"], 2),
             "violations": len(final["violations"]),
             "slowest": [[r["nodeid"], round(r["call_s"], 2)] for r in slowest],
         }
@@ -339,7 +374,8 @@ class BudgetGuard:
             f"mode={self.cfg.mode} tests={len(records)} wall={final['wall_s']:.1f}s "
             f"peak_rss={final['peak_rss_bytes'] / GB:.2f}GB "
             f"compiles={final['compiles']} "
-            f"violations={len(final['violations'])}"
+            f"violations={len(final['violations'])} "
+            f"compile_s={final['compile_s']:.1f}"
         )
         for line in final["violations"]:
             write(f"  over budget: {line}")
@@ -363,11 +399,13 @@ class BudgetGuard:
             : TOP_N * 2
         ]:
             write(f"  {rec['rss_growth_mb']:8.0f} MB  {rec['nodeid']}")
-        write("compiles per module:")
-        for name, count in sorted(
-            final["module_compiles"].items(), key=lambda kv: -kv[1]
-        ):
-            write(f"  {count:5d}  {name}")
+        write("compile count and seconds per module (top by seconds):")
+        by_seconds = sorted(
+            final["module_compile_s"].items(), key=lambda kv: kv[1], reverse=True
+        )
+        for name, seconds in by_seconds[: TOP_N * 2]:
+            count = final["module_compiles"].get(name, 0)
+            write(f"  {count:5d}  {seconds:8.1f} s  {name}")
         biggest = sorted(records, key=lambda r: r["compiles"], reverse=True)[:TOP_N]
         write("most compiles in one test:")
         for rec in biggest:

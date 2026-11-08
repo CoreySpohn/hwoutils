@@ -30,6 +30,11 @@ class BudgetConfig:
         module_compile_budget: Maximum compiles in one test module. Zero
             disables the check.
         module_compile_budget_by_file: Per-file overrides keyed by file name.
+        module_compile_seconds: Maximum backend compile seconds in one test
+            module, real compiles only (persistent-cache loads are excluded).
+            Zero disables the check. The value is used as written: the plugin
+            applies no scale factor to any budget.
+        module_compile_seconds_by_file: Per-file overrides keyed by file name.
         clear_caches: Run ``jax.clear_caches()`` and ``gc.collect()`` after
             each test module.
         compile_cache: Enable the persistent JAX compilation cache.
@@ -51,6 +56,8 @@ class BudgetConfig:
     rss_growth_report_mb: float = 500.0
     module_compile_budget: int = 0
     module_compile_budget_by_file: dict = field(default_factory=dict)
+    module_compile_seconds: float = 0.0
+    module_compile_seconds_by_file: dict = field(default_factory=dict)
     clear_caches: bool = False
     compile_cache: bool = False
     compile_cache_dir: str = ".jax_cache"
