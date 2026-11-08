@@ -361,12 +361,16 @@ class BudgetGuard:
 
         Fixtures it requests as arguments are set up before this hook runs; a
         fixture it pulls in with ``getfixturevalue`` is set up inside it. That
-        nested time is subtracted here and charged to the nested instance, and
-        every test that uses this instance also uses the nested one, because a
-        later test reuses the cached value without resolving it again.
+        nested time is subtracted here and charged to the nested instance. Every
+        fixture looked up during this setup, set up now or already cached, is
+        linked to this instance, and every test that uses this instance also
+        uses the linked ones, because a later test reuses the cached value
+        without resolving them again.
         """
         if not self.cfg.charge_fixture_setup:
             return (yield)
+        resolved = getattr(request, "_fixture_defs", None)
+        known = set(resolved) if isinstance(resolved, dict) else set()
         self._fixture_stack.append([0.0, []])
         start = time.perf_counter()
         try:
@@ -374,6 +378,13 @@ class BudgetGuard:
         finally:
             elapsed = time.perf_counter() - start
             nested, inside = self._fixture_stack.pop()
+            if isinstance(resolved, dict):
+                # Fixtures looked up by name during this setup, whether set up
+                # now or already cached, are part of this instance.
+                for name in set(resolved) - known:
+                    serial = self._live_fixture.get(resolved[name])
+                    if serial is not None and serial not in inside:
+                        inside.append(serial)
             self._fixture_serial += 1
             serial = self._fixture_serial
             if self._fixture_stack:

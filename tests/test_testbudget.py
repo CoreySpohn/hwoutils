@@ -839,3 +839,34 @@ def test_cache_load_is_counted_when_its_duration_closes_it():
         "/jax/core/compile/backend_compile_duration", 0.1
     )
     assert compiles.cache_hit_count() == before + 1
+
+
+ALREADY_CACHED_DEPENDENCY = """
+import time
+import pytest
+
+@pytest.fixture(scope="module")
+def inner():
+    time.sleep(0.3)
+
+@pytest.fixture(scope="module")
+def outer(request):
+    request.getfixturevalue("inner")
+
+def test_a(inner):
+    pass
+
+def test_b(outer):
+    pass
+
+def test_c(outer):
+    pass
+"""
+
+
+def test_cached_dependency_looked_up_by_a_fixture_is_shared(project, tmp_path):
+    """Fails if a dependency cached before a fixture looked it up skips later users."""
+    result, shares = _charges(project, tmp_path, ALREADY_CACHED_DEPENDENCY)
+    assert result.ret == 0
+    assert shares["test_c"] == pytest.approx(shares["test_a"], abs=0.03)
+    assert 0.07 < shares["test_c"] < 0.13
