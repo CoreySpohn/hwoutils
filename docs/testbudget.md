@@ -66,8 +66,11 @@ does not hide that test's cost.
 A test's fixtures are the ones it resolved: requested as arguments, by other
 fixtures, or by name with `request.getfixturevalue`, including the fixture an
 override chain reaches when a fixture requests its own name. Each fixture is
-charged its own setup time, without the fixtures set up inside it, and a test
-rerun counts as one user. A fixture first set up inside a test body is already
+charged its own setup time, without the fixtures set up inside it; a test
+that uses a fixture also uses every fixture set up inside that fixture's
+setup, so a later test reusing the cached value shares those too. The users
+are taken as the call phase ends, before any teardown, and a test rerun counts
+as one user. A fixture first set up inside a test body is already
 part of that test's call time and carries no further charge. The charge is judged when the session ends, because
 the number of users is known only then: in enforce mode the session exits
 nonzero and lists each test under over-budget items. `--budget-report` lists

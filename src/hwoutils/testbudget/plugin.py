@@ -210,13 +210,22 @@ def fixture_charges(records: list[dict], instances: dict) -> None:
 
     A fixture instance's setup time is split equally among the distinct tests
     that used it, so a rerun of one test does not dilute its share; a
-    function-scoped instance has exactly one user. An instance set up inside a
+    function-scoped instance has exactly one user. A test that used an instance
+    also used every instance set up inside its setup. An instance set up inside a
     call phase carries no charge, because its time is already in that call.
     The cost of a test is its call time plus its shares.
     """
+    for rec in records:
+        keys, todo = set(), list(rec.get("fixtures", ()))
+        while todo:
+            key = todo.pop()
+            if key not in keys:
+                keys.add(key)
+                todo.extend(instances.get(key, {}).get("inside", ()))
+        rec["fixtures"] = sorted(keys)
     users: dict[int, set] = {}
     for rec in records:
-        for key in rec.get("fixtures", ()):
+        for key in rec["fixtures"]:
             users.setdefault(key, set()).add(rec["nodeid"])
     for rec in records:
         share = 0.0
@@ -336,6 +345,7 @@ class BudgetGuard:
         self.current_test = item.nodeid
         compiles.reset_pending()
         item._testbudget_record = None
+        item._testbudget_fixtures = []
         rss_before = current_rss_bytes()
         result = yield
         rss_after = current_rss_bytes()
@@ -350,40 +360,32 @@ class BudgetGuard:
         """Time each fixture instance's own setup.
 
         Fixtures it requests as arguments are set up before this hook runs; a
-        fixture it pulls in with ``getfixturevalue`` is set up inside it, so
-        that nested time is subtracted here and charged to the nested fixture,
-        which the test's request records as used.
+        fixture it pulls in with ``getfixturevalue`` is set up inside it. That
+        nested time is subtracted here and charged to the nested instance, and
+        every test that uses this instance also uses the nested one, because a
+        later test reuses the cached value without resolving it again.
         """
         if not self.cfg.charge_fixture_setup:
             return (yield)
-        self._fixture_stack.append([0.0])
+        self._fixture_stack.append([0.0, []])
         start = time.perf_counter()
         try:
             return (yield)
         finally:
             elapsed = time.perf_counter() - start
-            nested = self._fixture_stack.pop()[0]
+            nested, inside = self._fixture_stack.pop()
+            self._fixture_serial += 1
+            serial = self._fixture_serial
             if self._fixture_stack:
                 self._fixture_stack[-1][0] += elapsed
-            self._fixture_serial += 1
-            self._fixture_instances[self._fixture_serial] = {
+                self._fixture_stack[-1][1].append(serial)
+            self._fixture_instances[serial] = {
                 "name": fixturedef.argname,
                 "scope": fixturedef.scope,
                 "setup_s": 0.0 if self._in_call else max(elapsed - nested, 0.0),
+                "inside": inside,
             }
-            self._live_fixture[fixturedef] = self._fixture_serial
-
-    @pytest.hookimpl(wrapper=True)
-    def pytest_runtest_teardown(self, item, nextitem):
-        """Record the fixture instances the test used, before any is torn down."""
-        record = getattr(item, "_testbudget_record", None)
-        if self.cfg.charge_fixture_setup and record is not None:
-            record["fixtures"] = [
-                self._live_fixture[fd]
-                for fd in _resolved_fixturedefs(item)
-                if fd.cached_result is not None and fd in self._live_fixture
-            ]
-        return (yield)
+            self._live_fixture[fixturedef] = serial
 
     @pytest.hookimpl(wrapper=True)
     def pytest_runtest_call(self, item):
@@ -395,6 +397,14 @@ class BudgetGuard:
             return (yield)
         finally:
             self._in_call = False
+            if self.cfg.charge_fixture_setup:
+                # Taken as the call ends, before any teardown hook can finish
+                # or replace a fixture.
+                item._testbudget_fixtures = [
+                    self._live_fixture[fd]
+                    for fd in _resolved_fixturedefs(item)
+                    if fd.cached_result is not None and fd in self._live_fixture
+                ]
             self._call_compiles[item.nodeid] = (
                 compiles.compile_count() - before,
                 compiles.compile_seconds() - before_s,
@@ -422,7 +432,7 @@ class BudgetGuard:
             "compile_s": compile_s,
             "limit_s": limit_s,
             "passed": report.outcome == "passed",
-            "fixtures": [],
+            "fixtures": getattr(item, "_testbudget_fixtures", []),
         }
         self.records.append(item._testbudget_record)
         if report.outcome != "passed":

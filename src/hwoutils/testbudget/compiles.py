@@ -53,18 +53,18 @@ def _on_duration(event: str, duration: float, **kwargs) -> None:
     global _count, _seconds
     if event != _BACKEND_COMPILE:
         return
+    global _cache_hits
     pending = _pending()
     if pending > 0:
         _state.pending_hits = pending - 1
+        _cache_hits += 1
         return
     _count += 1
     _seconds += float(duration)
 
 
 def _on_event(event: str, **kwargs) -> None:
-    global _cache_hits
     if event == _CACHE_HIT:
-        _cache_hits += 1
         _state.pending_hits = _pending() + 1
 
 
@@ -94,5 +94,9 @@ def compile_seconds() -> float:
 
 
 def cache_hit_count() -> int:
-    """Return the number of programs loaded from the persistent cache."""
+    """Return the number of programs loaded from the persistent cache.
+
+    A load is counted when its duration event closes it, the same moment a real
+    compile is counted, so both fall in the same test and module.
+    """
     return _cache_hits

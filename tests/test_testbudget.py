@@ -748,3 +748,94 @@ def test_module_program_budget_counts_cache_loads(project, tmp_path):
     result.assert_outcomes(passed=1, errors=1)
     result.stdout.fnmatch_lines(["*compiled 4 programs (1 from the cache)*"])
     assert json.loads(out.read_text())["module_cache_loads"] == {"test_demo.py": 1}
+
+
+DYNAMIC_OVERRIDE = """
+import time
+import pytest
+
+@pytest.fixture
+def costly():
+    time.sleep(0.4)
+
+class TestChild:
+    @pytest.fixture
+    def costly(self, request):
+        return request.getfixturevalue("costly")
+
+    def test_uses_child(self, costly):
+        pass
+"""
+
+
+def test_parent_reached_by_name_lookup_in_an_override_is_charged(project, tmp_path):
+    """Fails if an override that looks its parent up by name hides the parent."""
+    result, shares = _charges(project, tmp_path, DYNAMIC_OVERRIDE)
+    assert result.ret != 0
+    assert shares["test_uses_child"] > 0.35
+
+
+CACHED_DYNAMIC_DEPENDENCY = """
+import time
+import pytest
+
+@pytest.fixture(scope="module")
+def inner():
+    time.sleep(0.3)
+
+@pytest.fixture(scope="module")
+def outer(request):
+    request.getfixturevalue("inner")
+
+def test_a(outer):
+    pass
+
+def test_b(outer):
+    pass
+"""
+
+
+def test_cached_fixture_shares_what_it_set_up_inside(project, tmp_path):
+    """Fails if a later user of a cached fixture escapes what it pulled in."""
+    result, shares = _charges(project, tmp_path, CACHED_DYNAMIC_DEPENDENCY)
+    assert result.ret == 0
+    assert shares["test_a"] == pytest.approx(shares["test_b"], abs=0.05)
+    assert 0.1 < shares["test_a"] < 0.19
+
+
+def test_users_are_taken_before_another_plugin_tears_down(pytester, tmp_path):
+    """Fails if a teardown hook that finishes fixtures early erases the charge."""
+    pytester.makepyprojecttoml(
+        '[project]\nname = "demo"\n[tool.testbudget]\nrss_poll_s = 0\n'
+        f'trend_file = "{tmp_path / "t.jsonl"}"\n{CHARGED}\n'
+    )
+    pytester.makeconftest(
+        """
+import pytest
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_teardown(item, nextitem):
+    item.session._setupstate.teardown_exact(None)
+"""
+    )
+    pytester.makepyfile(test_demo=SINGLE_USE_FIXTURE)
+    result = pytester.runpytest_inprocess("-p", "hwoutils.testbudget.plugin")
+    assert result.ret != 0
+    result.stdout.fnmatch_lines(["*with its share of fixture setup*'built'*"])
+
+
+def test_cache_load_is_counted_when_its_duration_closes_it():
+    """Fails if a load counts at its hit event instead of with its duration."""
+    import jax.monitoring
+
+    from hwoutils.testbudget import compiles
+
+    compiles.install()
+    compiles.reset_pending()
+    before = compiles.cache_hit_count()
+    jax.monitoring.record_event("/jax/compilation_cache/cache_hits")
+    assert compiles.cache_hit_count() == before
+    jax.monitoring.record_event_duration_secs(
+        "/jax/core/compile/backend_compile_duration", 0.1
+    )
+    assert compiles.cache_hit_count() == before + 1
