@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.13.0](https://github.com/CoreySpohn/hwoutils/compare/v1.12.0...v1.13.0) (2026-11-08)
+
+
+### Features
+
+* **testbudget:** record compile seconds and add module_compile_seconds budgets ([47a3fb8](https://github.com/CoreySpohn/hwoutils/commit/47a3fb8bf50f5461d27861010f1fb98c60fe73ba))
+
+
+### Bug Fixes
+
+* **testbudget:** key modules by relative path, judge revisits cumulatively, reset hits globally ([3c1bcfd](https://github.com/CoreySpohn/hwoutils/commit/3c1bcfd88462b2b72256155da6396a68d0da7ead))
+* **testbudget:** reset pending cache hits per thread and cover module key precedence ([efdcddc](https://github.com/CoreySpohn/hwoutils/commit/efdcddcf1028862f50bf37456ba1bab069ad8c88))
+* **testbudget:** sum module budgets across xdist workers and pair nested cache hits ([ddecd84](https://github.com/CoreySpohn/hwoutils/commit/ddecd84462601de14228ff58e7c871d624a155dd))
+
 ## [1.12.0](https://github.com/CoreySpohn/hwoutils/compare/v1.11.0...v1.12.0) (2026-11-07)
 
 
