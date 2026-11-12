@@ -6,6 +6,7 @@ see ``hwoutils.testbudget.config.BudgetConfig`` for the keys.
 """
 
 import gc
+import inspect
 import json
 import os
 import sys
@@ -173,6 +174,12 @@ def _has_reason(marker) -> bool:
     return isinstance(reason, str) and bool(reason.strip())
 
 
+def _lookup_scope(manager, item):
+    """Return the lookup key: a node id before pytest 8.1, else the node."""
+    by_nodeid = "nodeid" in inspect.signature(manager.getfixturedefs).parameters
+    return item.nodeid if by_nodeid else item
+
+
 def _resolved_fixturedefs(item):
     """Return the fixture definitions an item resolved, override parents included.
 
@@ -199,7 +206,9 @@ def _resolved_fixturedefs(item):
             seen.append(fd)
             if fd.argname not in fd.argnames:
                 break
-            chain = list(manager.getfixturedefs(fd.argname, item) or ())
+            chain = list(
+                manager.getfixturedefs(fd.argname, _lookup_scope(manager, item)) or ()
+            )
             position = chain.index(fd) if fd in chain else 0
             fd = chain[position - 1] if position > 0 else None
     return seen
