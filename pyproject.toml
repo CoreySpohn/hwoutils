@@ -109,3 +109,7 @@ python-version = "3.11"
 
 [tool.ty.src]
 include = ["src/hwoutils"]
+
+[tool.codespell]
+# "lod" is the lambda/D grid unit name.
+ignore-words-list = "lod"

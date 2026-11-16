@@ -1,0 +1,390 @@
+"""Static image geometry and arrays with explicit sampling metadata.
+
+Arrays are (..., y, x); named coordinates are (x, y). Pixel (row j, column i)
+is centered at (i, j), so the array corner is (-0.5, -0.5). Coordinates obey
+u = B (p - c). No array or device value is stored in a PixelGrid.
+"""
+
+import math
+from dataclasses import dataclass, fields
+from operator import index
+from typing import NamedTuple
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from hwoutils.conversions import lambda_d_to_arcsec
+from hwoutils.map_coordinates import map_coordinates
+
+
+class _XY(NamedTuple):
+    x: object
+    y: object
+
+
+@dataclass(frozen=True)
+class Frame:
+    """Definition of one lambda/D, including the declared diameter convention.
+
+    The convention labels which physical diameter is supplied; no conversion
+    between inscribed and circumscribed diameters is inferred.
+    """
+
+    reference_wavelength_nm: float
+    diameter_m: float
+    diameter_convention: str
+
+    def __post_init__(self):
+        """Store finite positive host floats and validate the diameter label."""
+        for name in ("reference_wavelength_nm", "diameter_m"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be positive and finite")
+            object.__setattr__(self, name, value)
+        if self.diameter_convention not in ("circumscribed", "inscribed"):
+            raise ValueError("diameter_convention must be circumscribed or inscribed")
+
+    def lod_to_arcsec(self, wavelength_nm):
+        """Size of one lambda/D in arcsec; wavelength_nm may be traced."""
+        return lambda_d_to_arcsec(1.0, wavelength_nm, self.diameter_m)
+
+
+@dataclass(frozen=True)
+class SkyOrientation:
+    """Position angle of detector +y, north through east, and handedness.
+
+    Let c=cos(pa_y_deg), s=sin(pa_y_deg). Detector +y has sky direction
+    (E,N)=(s,c); the orthogonal +x direction is parity*(c,-s). Thus
+    x=parity*(E*c-N*s), y=E*s+N*c, with determinant parity. For parity +1,
+    x=E*c-N*s; for the inside-sphere parity -1, x=-E*c+N*s. The inverse
+    is the transpose since both detector axes are orthonormal.
+    """
+
+    pa_y_deg: float
+    parity: int = -1
+
+    def __post_init__(self):
+        """Canonicalize host values and reject undefined orientations."""
+        object.__setattr__(self, "pa_y_deg", float(self.pa_y_deg))
+        object.__setattr__(self, "parity", index(self.parity))
+        if not math.isfinite(self.pa_y_deg) or self.parity not in (-1, 1):
+            raise ValueError("orientation needs finite pa_y_deg and parity -1 or +1")
+
+    def sky_to_detector(self, east, north):
+        """Map east/north offsets to named detector (x, y) offsets."""
+        c, s = (
+            math.cos(math.radians(self.pa_y_deg)),
+            math.sin(math.radians(self.pa_y_deg)),
+        )
+        east, north = jnp.asarray(east), jnp.asarray(north)
+        return _XY(self.parity * (east * c - north * s), east * s + north * c)
+
+    def detector_to_sky(self, x, y):
+        """Return named (east, north) offsets in the sky plane."""
+        c, s = (
+            math.cos(math.radians(self.pa_y_deg)),
+            math.sin(math.radians(self.pa_y_deg)),
+        )
+        x, y = jnp.asarray(x), jnp.asarray(y)
+        return _Sky(self.parity * c * x + s * y, -self.parity * s * x + c * y)
+
+
+class _Sky(NamedTuple):
+    east: object
+    north: object
+
+
+@jax.tree_util.register_static
+@dataclass(frozen=True)
+class PixelGrid:
+    """Hashable host geometry, with basis mapping pixel offsets to unit.
+
+    shape is (ny, nx), center_x/center_y are pixel-center coordinates, and
+    basis is a nonsingular 2 by 2 tuple. frame is mandatory for unit='lod'.
+    orientation, when present, relates the unit plane to the east/north sky.
+    """
+
+    shape: tuple[int, int]
+    center_x: float
+    center_y: float
+    basis: tuple[tuple[float, float], tuple[float, float]]
+    unit: str
+    frame: Frame | None = None
+    orientation: SkyOrientation | None = None
+
+    def __post_init__(self):
+        """Canonicalize host geometry and validate units and invertibility."""
+        shape = tuple(index(n) for n in self.shape)
+        if len(shape) != 2 or min(shape) < 1:
+            raise ValueError("shape must contain positive (ny, nx)")
+        basis = np.asarray(self.basis, dtype=np.float64)
+        if basis.shape != (2, 2) or not np.all(np.isfinite(basis)):
+            raise ValueError("basis must be finite with shape (2, 2)")
+        determinant = basis[0, 0] * basis[1, 1] - basis[0, 1] * basis[1, 0]
+        if not np.isfinite(determinant) or determinant == 0:
+            raise ValueError("basis must be nonsingular with finite determinant")
+        object.__setattr__(self, "shape", shape)
+        object.__setattr__(
+            self, "basis", tuple(tuple(map(float, row)) for row in basis)
+        )
+        for name in ("center_x", "center_y"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value):
+                raise ValueError("centers must be finite")
+            object.__setattr__(self, name, value)
+        if self.unit not in ("pupil_diameter", "meter", "lod", "arcsec"):
+            raise ValueError("unknown grid unit")
+        if self.unit == "lod" and self.frame is None:
+            raise ValueError("a lod grid requires a frame")
+        if self.frame is not None and not isinstance(self.frame, Frame):
+            raise TypeError("frame must be a Frame")
+        if self.orientation is not None and not isinstance(
+            self.orientation, SkyOrientation
+        ):
+            raise TypeError("orientation must be a SkyOrientation")
+
+    @classmethod
+    def regular(cls, shape, step, unit, *, center=None, frame=None, orientation=None):
+        """Make an axis-aligned isotropic grid; center defaults to geometric (x,y)."""
+        if center is None:
+            center = ((shape[1] - 1) / 2, (shape[0] - 1) / 2)
+        step = float(step)
+        if not math.isfinite(step) or step <= 0:
+            raise ValueError("step must be positive and finite")
+        return cls(
+            shape,
+            center[0],
+            center[1],
+            ((step, 0.0), (0.0, step)),
+            unit,
+            frame,
+            orientation,
+        )
+
+    @classmethod
+    def pupil(cls, npix):
+        """Square grid spanning one pupil diameter, with geometric center."""
+        npix = index(npix)
+        if npix < 1:
+            raise ValueError("npix must be positive")
+        return cls.regular((npix, npix), 1 / npix, "pupil_diameter")
+
+    @classmethod
+    def focal(cls, npix, step_lod, frame):
+        """Square focal grid in lambda/D, with geometric center."""
+        return cls.regular((npix, npix), step_lod, "lod", frame=frame)
+
+    @classmethod
+    def from_corner_count(
+        cls, shape, center_x, center_y, basis, unit, frame=None, orientation=None
+    ):
+        """Construct from corner counts, subtracting 0.5 from each center count.
+
+        Arguments match PixelGrid; only center_x and center_y change meaning
+        here. For example, a header count 128 becomes center coordinate 127.5.
+        """
+        return cls(
+            shape,
+            float(center_x) - 0.5,
+            float(center_y) - 0.5,
+            basis,
+            unit,
+            frame,
+            orientation,
+        )
+
+    def coordinates(self):
+        """Return named (x, y) arrays of shape (ny, nx), in this grid's unit."""
+        rows, columns = jnp.indices(
+            self.shape, dtype=jnp.float64 if jax.config.x64_enabled else jnp.float32
+        )
+        return self.pixel_to_unit(columns, rows)
+
+    def pixel_to_unit(self, x, y):
+        """Map named pixel-center coordinates (x, y) to offsets in unit."""
+        dx, dy = jnp.asarray(x) - self.center_x, jnp.asarray(y) - self.center_y
+        (a, b), (c, d) = self.basis
+        return _XY(a * dx + b * dy, c * dx + d * dy)
+
+    def unit_to_pixel(self, x, y):
+        """Invert the basis and center, returning named pixel coordinates (x,y)."""
+        (a, b), (c, d) = self.basis
+        det = a * d - b * c
+        x, y = jnp.asarray(x), jnp.asarray(y)
+        return _XY(
+            (d * x - b * y) / det + self.center_x, (a * y - c * x) / det + self.center_y
+        )
+
+    @property
+    def step(self) -> float:
+        """Positive scalar spacing; raise for rotated or anisotropic bases."""
+        (a, b), (c, d) = self.basis
+        if b != 0 or c != 0 or a != d or a <= 0:
+            raise ValueError("step requires a positive isotropic axis-aligned basis")
+        return a
+
+    @property
+    def pixel_area(self) -> float:
+        """Absolute basis determinant, in unit squared."""
+        (a, b), (c, d) = self.basis
+        return abs(a * d - b * c)
+
+    def to_arcsec(self, wavelength_nm) -> "PixelGrid":
+        """Convert a lod grid at a concrete wavelength to static arcsec geometry.
+
+        The basis scales by lambda/D at wavelength_nm, preserving centers and
+        retaining the frame. Static grid creation is a host operation; use
+        Frame.lod_to_arcsec for traced wavelength calculations.
+        """
+        if self.unit != "lod":
+            raise ValueError("to_arcsec requires a lod grid")
+        wavelength_nm = float(wavelength_nm)
+        if not math.isfinite(wavelength_nm) or wavelength_nm <= 0:
+            raise ValueError("wavelength_nm must be positive and finite")
+        scale = self.frame.lod_to_arcsec(wavelength_nm)
+        basis = tuple(tuple(value * scale for value in row) for row in self.basis)
+        return PixelGrid(
+            self.shape,
+            self.center_x,
+            self.center_y,
+            basis,
+            "arcsec",
+            self.frame,
+            self.orientation,
+        )
+
+    def is_native(self, wavelength_nm):
+        """Whether this is a lod grid at its frame's reference wavelength."""
+        return (
+            self.unit == "lod" and wavelength_nm == self.frame.reference_wavelength_nm
+        )
+
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True, eq=False)
+class GridArray:
+    """Array (..., y, x) with a static grid and names for every leading axis.
+
+    Construction validates shape and names. PyTree reconstruction bypasses
+    construction checks, as JAX may insert placeholders or map away an axis.
+    When returning a container with a changed rank, supply the new axis names.
+    """
+
+    data: jax.Array
+    grid: PixelGrid
+    leading_axes: tuple[str, ...]
+
+    def __post_init__(self):
+        """Convert data and validate spatial shape and leading-axis labels."""
+        object.__setattr__(self, "data", jnp.asarray(self.data))
+        object.__setattr__(self, "leading_axes", tuple(self.leading_axes))
+        if self.data.ndim < 2 or self.data.shape[-2:] != self.grid.shape:
+            raise ValueError("data spatial shape must match grid.shape")
+        if len(self.leading_axes) != self.data.ndim - 2:
+            raise ValueError("leading_axes count must match data leading dimensions")
+        if any(not isinstance(name, str) or not name for name in self.leading_axes):
+            raise ValueError("leading_axes must contain nonempty strings")
+
+    def tree_flatten(self):
+        """Expose data, retaining all other dataclass fields as static metadata."""
+        metadata = tuple(getattr(self, field.name) for field in fields(self)[1:])
+        return (self.data,), metadata
+
+    @classmethod
+    def tree_unflatten(cls, metadata, arrays):
+        """Rebuild transformed containers without converting JAX placeholders."""
+        result = object.__new__(cls)
+        for field, value in zip(fields(cls), (arrays[0], *metadata), strict=True):
+            object.__setattr__(result, field.name, value)
+        return result
+
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True, eq=False)
+class Image(GridArray):
+    """Image values with static measure and a short quantity unit label.
+
+    measure='per_pixel' means integrated pixel flux; 'per_unit_area' means
+    density in the grid unit squared. quantity labels the stored data unit.
+    """
+
+    measure: str
+    quantity: str
+
+    def __post_init__(self):
+        """Validate array geometry and the interpretation of image values."""
+        super().__post_init__()
+        if self.measure not in ("per_pixel", "per_unit_area"):
+            raise ValueError("measure must be 'per_pixel' or 'per_unit_area'")
+        if not isinstance(self.quantity, str) or not self.quantity.strip():
+            raise ValueError("quantity must be a nonempty unit string")
+
+
+def resample(image: Image, target_grid: PixelGrid, *, order: int = 1) -> Image:
+    """Resample in one affine interpolation, respecting centers and full bases.
+
+    Both grids must have the same unit (and equal frames for lod). Convert
+    units explicitly first. If both orientations are supplied, coordinates
+    pass through the sky plane; if only one is supplied, orientation is unknown
+    and must be reconciled explicitly before resampling.
+
+    Use existing nearest (0), linear (1), or Keys cubic (3) interpolation.
+    Per-unit-area values sample the source reconstruction at target pixel
+    centers, with zero outside the source.
+
+    Per-pixel flux uses one of two reconstructions, chosen on the host from
+    the pixel areas. When the target pixels are smaller than the source
+    pixels (refinement) the flux is converted to a density, sampled at
+    target centers and multiplied by the target pixel area, which is the
+    model of ``transforms.resample_flux`` with explicit centers and bases:
+    the result is smooth, and the sum is conserved up to sampling error
+    (exactly for an interior source at an integer refinement). When the
+    target pixels are as large or larger (coarsening, equal scale, or a
+    rotation at equal scale) each source pixel's flux is deposited onto the
+    target with the transpose of the interpolation kernel; its partition of
+    unity conserves the sum to roundoff whenever the target contains every
+    nonzero source pixel's stencil. Cropping loses flux in both forms.
+    Neither is a pixel-footprint integral; use ``transforms.rebin_flux``
+    for that on centered, axis-aligned grids.
+    """
+    source_grid = image.grid
+    if source_grid.unit != target_grid.unit:
+        raise ValueError("resampling requires matching grid units")
+    if source_grid.unit == "lod" and source_grid.frame != target_grid.frame:
+        raise ValueError("lod resampling requires equal frames")
+    if (source_grid.orientation is None) != (target_grid.orientation is None):
+        raise ValueError("resampling requires both orientations or neither")
+    area_ratio = target_grid.pixel_area / source_grid.pixel_area
+    deposit_flux = image.measure == "per_pixel" and area_ratio >= 1.0
+    scale = area_ratio if image.measure == "per_pixel" and not deposit_flux else 1.0
+    # Sampling maps target centers into source pixels; deposition maps
+    # source centers into target pixels and applies the kernel's transpose.
+    from_grid, to_grid = (
+        (source_grid, target_grid) if deposit_flux else (target_grid, source_grid)
+    )
+    x, y = from_grid.coordinates()
+    if from_grid.orientation != to_grid.orientation:
+        east, north = from_grid.orientation.detector_to_sky(x, y)
+        x, y = to_grid.orientation.sky_to_detector(east, north)
+    pixels = to_grid.unit_to_pixel(x, y)
+    data = jnp.asarray(image.data, dtype=jnp.result_type(image.data, 1.0))
+
+    def interpolate(plane):
+        if deposit_flux:
+
+            def sample_target(target):
+                return map_coordinates(target, (pixels.y, pixels.x), order=order)
+
+            _, deposit = jax.vjp(
+                sample_target, jnp.zeros(target_grid.shape, dtype=plane.dtype)
+            )
+            return deposit(plane)[0]
+        return map_coordinates(plane, (pixels.y, pixels.x), order=order)
+
+    for _ in range(data.ndim - 2):
+        interpolate = jax.vmap(interpolate)
+    data = interpolate(data) * scale
+    return Image.tree_unflatten(
+        (target_grid, image.leading_axes, image.measure, image.quantity), (data,)
+    )
