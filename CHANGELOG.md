@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.15.0](https://github.com/CoreySpohn/hwoutils/compare/v1.14.0...v1.15.0) (2026-11-16)
+
+
+### Features
+
+* **hwoutils:** a reference epoch for day offsets, held as a two-part Julian date on one time scale ([77d8db6](https://github.com/CoreySpohn/hwoutils/commit/77d8db649dffbfe7c7e8601a80c31ed54c6fe1c0))
+
+
+### Bug Fixes
+
+* **hwoutils:** look fixtures up by node id on pytest before 8.1 ([80869c4](https://github.com/CoreySpohn/hwoutils/commit/80869c4c4314a1e69820702c79dec24d9417f8dc))
+
 ## [1.14.0](https://github.com/CoreySpohn/hwoutils/compare/v1.13.0...v1.14.0) (2026-11-08)
 
 
