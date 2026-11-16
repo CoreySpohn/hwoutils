@@ -303,25 +303,75 @@ class GridArray:
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True, eq=False)
 class Image(GridArray):
-    """Image values with static measure and a short quantity unit label.
+    """Image values with static measure, reconstruction, and quantity unit label.
 
     measure='per_pixel' means integrated pixel flux; 'per_unit_area' means
     density in the grid unit squared. quantity labels the stored data unit.
+    reconstruction declares how samples define a continuous density: nearest,
+    linear (default), Keys cubic, or band_limited. For band_limited per-pixel
+    data, data / pixel_area are density samples, not deconvolved box averages.
     """
 
     measure: str
     quantity: str
+    reconstruction: str = "linear"
 
     def __post_init__(self):
         """Validate array geometry and the interpretation of image values."""
         super().__post_init__()
         if self.measure not in ("per_pixel", "per_unit_area"):
             raise ValueError("measure must be 'per_pixel' or 'per_unit_area'")
+        _validate_reconstruction(self.reconstruction)
         if not isinstance(self.quantity, str) or not self.quantity.strip():
             raise ValueError("quantity must be a nonempty unit string")
 
 
-def resample(image: Image, target_grid: PixelGrid, *, order: int = 1) -> Image:
+def _validate_reconstruction(reconstruction):
+    """Reject unknown reconstruction names before tracing numeric operations."""
+    if reconstruction not in ("nearest", "linear", "cubic", "band_limited"):
+        raise ValueError(
+            "reconstruction must be nearest, linear, cubic, or band_limited"
+        )
+
+
+def _pixel_map(source, target):
+    """Compose the static target-to-source linear map through the sky plane."""
+
+    def orientation_matrix(orientation):
+        angle = math.radians(orientation.pa_y_deg)
+        c, s = math.cos(angle), math.sin(angle)
+        return np.array([[orientation.parity * c, -orientation.parity * s], [s, c]])
+
+    transform = np.eye(2)
+    if source.orientation != target.orientation:
+        transform = (
+            orientation_matrix(source.orientation)
+            @ orientation_matrix(target.orientation).T
+        )
+    return np.linalg.solve(np.asarray(source.basis), transform @ target.basis)
+
+
+def _band_limited_matrix(n_source, positions, width, pad_factor, dtype, integrate):
+    """Build one target-by-source DFT interpolation or box-integration matrix."""
+    n_padded = math.ceil(pad_factor * n_source)
+    frequencies = np.fft.fftfreq(n_padded).astype(dtype)
+    positions = np.asarray(positions, dtype=dtype)
+    samples = np.arange(n_source, dtype=dtype)
+    phase = np.asarray(2j * np.pi, dtype=np.result_type(dtype, np.complex64))
+    evaluate = np.exp(phase * positions[:, None] * frequencies)
+    if integrate:
+        evaluate *= np.sinc(frequencies * np.asarray(width, dtype=dtype))
+    analyze = np.exp(-phase * frequencies[:, None] * samples)
+    return (evaluate @ analyze) / n_padded
+
+
+def resample(
+    image: Image,
+    target_grid: PixelGrid,
+    *,
+    reconstruction: str | None = None,
+    pad_factor: float = 2,
+) -> Image:
     """Resample in one affine interpolation, respecting centers and full bases.
 
     Both grids must have the same unit (and equal frames for lod). Convert
@@ -329,11 +379,13 @@ def resample(image: Image, target_grid: PixelGrid, *, order: int = 1) -> Image:
     pass through the sky plane; if only one is supplied, orientation is unknown
     and must be reconciled explicitly before resampling.
 
-    Use existing nearest (0), linear (1), or Keys cubic (3) interpolation.
+    reconstruction overrides the image's declared reconstruction for this
+    operation only. nearest, linear, and cubic use the existing kernels.
+    reconstruction and pad_factor must be static when supplied under jit.
     Per-unit-area values sample the source reconstruction at target pixel
     centers, with zero outside the source.
 
-    Per-pixel flux uses one of two reconstructions, chosen on the host from
+    For these three kernels, per-pixel flux uses two forms, chosen on the host from
     the pixel areas. When the target pixels are smaller than the source
     pixels (refinement) the flux is converted to a density, sampled at
     target centers and multiplied by the target pixel area, which is the
@@ -347,6 +399,40 @@ def resample(image: Image, target_grid: PixelGrid, *, order: int = 1) -> Image:
     nonzero source pixel's stencil. Cropping loses flux in both forms.
     Neither is a pixel-footprint integral; use ``transforms.rebin_flux``
     for that on centered, axis-aligned grids.
+
+    band_limited uses the trigonometric interpolant of a zero-padded array:
+    data are assumed zero outside the source array. Each padded axis has
+    P=ceil(pad_factor*N) samples (default 2; 1 means no padding). Padding
+    separates periodic copies; evaluation remains periodic with period P,
+    so it does not make arbitrarily distant target coordinates zero.
+    Both bases and the composed target-to-source map must be diagonal;
+    rotation or shear raises NotImplementedError. Reflections are supported.
+
+    Per-axis derivation, in source-pixel coordinates (sinc(z)=sin(pi*z)/(pi*z)):
+    c_k = sum_n d_n exp(-2*pi*i*k*n/P) / P, with FFT-ordered k.
+    A_jn = sum_k exp(2*pi*i*k*(t_j-n)/P) / P evaluates the density.
+    Averaging over width w multiplies each mode by sinc(k*w/P), giving B_jn.
+    For per_unit_area return A_y @ data @ A_x.T at target centers.
+    For per_pixel, density samples are data / source_pixel_area; integrating
+    yields target_pixel_area/source_pixel_area * B_y @ data @ B_x.T.
+    Real inputs use the cosine Nyquist convention separately on each even
+    axis; complex inputs retain the FFT-ordered signed Nyquist mode.
+
+    Matrices are built on the host from static geometry, in the input's real
+    and complex precision, then applied with JAX; integer inputs are promoted
+    to floating point. float32 has a rounding floor (typically 1e-5 for small
+    grids, increasing with phase arguments and matrix size); use float64 for
+    precision photometry. No clipping or flux renormalization is performed.
+    Integrating a complete padded period conserves per-pixel total flux to
+    roundoff, even when coarsened; cropping generally does not. Coarsening
+    aliases the density, so subsequent reconstruction need not conserve flux.
+
+    The output retains the source declaration, regardless of an override,
+    except that a band_limited source becomes linear when the target Nyquist
+    region cannot contain its source frequency box. If p_source=M*p_target+b,
+    target frequencies are M.T*f_source; the condition is each column's
+    absolute sum <= 1 (for a diagonal M, each absolute spacing ratio <= 1).
+    Coarsening either axis fails this guarantee even if pixel area decreases.
     """
     source_grid = image.grid
     if source_grid.unit != target_grid.unit:
@@ -355,7 +441,62 @@ def resample(image: Image, target_grid: PixelGrid, *, order: int = 1) -> Image:
         raise ValueError("lod resampling requires equal frames")
     if (source_grid.orientation is None) != (target_grid.orientation is None):
         raise ValueError("resampling requires both orientations or neither")
+    selected = image.reconstruction if reconstruction is None else reconstruction
+    _validate_reconstruction(selected)
+    mapping = _pixel_map(source_grid, target_grid)
+    output_reconstruction = image.reconstruction
+    if output_reconstruction == "band_limited" and np.any(
+        np.sum(np.abs(mapping), axis=0) > 1 + 32 * np.finfo(float).eps
+    ):
+        output_reconstruction = "linear"
+    metadata = (
+        target_grid,
+        image.leading_axes,
+        image.measure,
+        image.quantity,
+        output_reconstruction,
+    )
     area_ratio = target_grid.pixel_area / source_grid.pixel_area
+    data = jnp.asarray(image.data, dtype=jnp.result_type(image.data, 1.0))
+    if selected == "band_limited":
+        for matrix in (source_grid.basis, target_grid.basis, mapping):
+            matrix = np.asarray(matrix)
+            tolerance = 32 * np.finfo(float).eps * np.max(np.abs(matrix))
+            if np.any(np.abs(matrix[[0, 1], [1, 0]]) > tolerance):
+                raise NotImplementedError(
+                    "band_limited reconstruction does not support rotated or sheared "
+                    "grid bases or composed maps"
+                )
+        pad_factor = float(pad_factor)
+        if not math.isfinite(pad_factor) or pad_factor < 1:
+            raise ValueError("pad_factor must be finite and at least 1")
+        matrices = []
+        for axis, source_center, target_center in (
+            (0, source_grid.center_x, target_grid.center_x),
+            (1, source_grid.center_y, target_grid.center_y),
+        ):
+            ratio = mapping[axis, axis]
+            positions = (
+                np.arange(target_grid.shape[1 - axis]) - target_center
+            ) * ratio + source_center
+            matrix = _band_limited_matrix(
+                source_grid.shape[1 - axis],
+                positions,
+                abs(ratio),
+                pad_factor,
+                data.real.dtype,
+                image.measure == "per_pixel",
+            )
+            # A real cosine choice on EACH axis avoids a mixed Nyquist term.
+            if not jnp.iscomplexobj(data):
+                matrix = matrix.real
+            matrices.append(jnp.asarray(matrix, dtype=data.dtype))
+        wx, wy = matrices
+        data = wy @ data @ wx.T
+        if image.measure == "per_pixel":
+            data = data * area_ratio
+        return Image.tree_unflatten(metadata, (data,))
+    order = {"nearest": 0, "linear": 1, "cubic": 3}[selected]
     deposit_flux = image.measure == "per_pixel" and area_ratio >= 1.0
     scale = area_ratio if image.measure == "per_pixel" and not deposit_flux else 1.0
     # Sampling maps target centers into source pixels; deposition maps
@@ -368,7 +509,6 @@ def resample(image: Image, target_grid: PixelGrid, *, order: int = 1) -> Image:
         east, north = from_grid.orientation.detector_to_sky(x, y)
         x, y = to_grid.orientation.sky_to_detector(east, north)
     pixels = to_grid.unit_to_pixel(x, y)
-    data = jnp.asarray(image.data, dtype=jnp.result_type(image.data, 1.0))
 
     def interpolate(plane):
         if deposit_flux:
@@ -385,6 +525,4 @@ def resample(image: Image, target_grid: PixelGrid, *, order: int = 1) -> Image:
     for _ in range(data.ndim - 2):
         interpolate = jax.vmap(interpolate)
     data = interpolate(data) * scale
-    return Image.tree_unflatten(
-        (target_grid, image.leading_axes, image.measure, image.quantity), (data,)
-    )
+    return Image.tree_unflatten(metadata, (data,))

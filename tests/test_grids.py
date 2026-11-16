@@ -151,13 +151,15 @@ def test_resample_identity_with_leading_axes():
     """Fails if identity shifts by half a pixel or loses image metadata.
 
     rtol=0, atol=8e-15 allows the float64 floor at values below 20.
-    Orders 0,1,3 need distinct programs because each uses a different stencil.
+    The three local reconstructions each need a distinct stencil program.
     """
     grid = PixelGrid.regular((4, 5), 0.25, "arcsec")
     data = jnp.arange(40.0).reshape(2, 4, 5) / 2
     image = Image(data, grid, ("time",), "per_pixel", "phot/s")
-    for order in (0, 1, 3):
-        actual = jax.jit(lambda im, order=order: resample(im, grid, order=order))(image)
+    for reconstruction in ("nearest", "linear", "cubic"):
+        actual = jax.jit(
+            lambda im, mode=reconstruction: resample(im, grid, reconstruction=mode)
+        )(image)
         np.testing.assert_allclose(actual.data, data, rtol=0, atol=8e-15)
         assert actual.grid == grid
         assert actual.measure == image.measure and actual.quantity == image.quantity
@@ -253,3 +255,326 @@ def test_resample_composes_anisotropic_rotation_and_orientation():
     compact = jnp.zeros(source.shape).at[5:7, 6:8].set(1.0)
     flux = Image(compact, source, (), "per_pixel", "phot/s")
     np.testing.assert_allclose(resample(flux, coarse).data.sum(), 4, rtol=0, atol=3e-14)
+
+
+def test_band_limited_periodic_exactness():
+    """Fails on phase, axis, pixel-area, or sinc normalization errors.
+
+    Basis: exact sinusoidal point values and analytic rectangular integrals;
+    200 epsilon allows DFT phase/reduction rounding in float32 and float64.
+    Rectangular odd/even axes, anisotropic spacing, and parity reversal cover
+    distinct geometry failures using the same small transform structure.
+    """
+    source = PixelGrid(
+        (7, 8),
+        3.2,
+        2.6,
+        ((0.4, 0), (0, 0.6)),
+        "arcsec",
+        orientation=SkyOrientation(13, -1),
+    )
+    target = PixelGrid(
+        (11, 13),
+        5.7,
+        4.8,
+        ((0.23, 0), (0, 0.37)),
+        "arcsec",
+        orientation=SkyOrientation(13, 1),
+    )
+
+    def field(grid, width_x=0, width_y=0):
+        # Coordinates in the SOURCE detector frame: target parity flips x.
+        x, y = map(np.asarray, grid.coordinates())
+        if grid.orientation.parity == 1:
+            x = -x
+        fx, fy = 2 / (8 * 0.4), 1 / (7 * 0.6)
+        return (
+            2
+            + 0.3
+            * np.sin(2 * np.pi * (fx * x + fy * y) + 0.2)
+            * np.sinc(fx * width_x)
+            * np.sinc(fy * width_y)
+            + 0.4 * np.cos(2 * np.pi * fy * y - 0.7) * np.sinc(fy * width_y)
+        )
+
+    for dtype in (jnp.float32, jnp.float64):
+        for measure in ("per_unit_area", "per_pixel"):
+            source_area = 0.4 * 0.6 if measure == "per_pixel" else 1
+            image = Image(
+                jnp.asarray(field(source) * source_area, dtype=dtype),
+                source,
+                (),
+                measure,
+                "flux",
+                "band_limited",
+            )
+            for grid in (target, replace(source, center_x=3.57, center_y=2.31)):
+                expected = field(grid)
+                if measure == "per_pixel":
+                    dx, dy = grid.basis[0][0], grid.basis[1][1]
+                    expected = field(grid, dx, dy) * dx * dy
+                actual = resample(image, grid, pad_factor=1)
+                assert actual.data.dtype == dtype
+                np.testing.assert_allclose(
+                    actual.data, expected, rtol=200 * np.finfo(dtype).eps, atol=0
+                )
+
+
+def test_band_limited_metadata_and_overrides():
+    """Fails if reconstruction metadata disappears or overrides are ignored.
+
+    Basis: exact metadata and local-kernel parity; float64 DFT identity has
+    atol=3e-14. Rotation/shear must fail only for the Fourier path, including
+    rotation introduced by orientation with diagonal grid bases.
+    """
+    source = PixelGrid.regular((4, 5), 1, "arcsec")
+    image = Image(
+        jnp.arange(20.0).reshape(4, 5),
+        source,
+        (),
+        "per_unit_area",
+        "flux",
+        "band_limited",
+    )
+    for transformed in (
+        jax.jit(lambda im: im)(image),
+        jax.tree.map(lambda d: d * 2, image),
+        replace(image, quantity="density"),
+    ):
+        assert transformed.reconstruction == "band_limited"
+    with pytest.raises(ValueError, match="reconstruction"):
+        replace(image, reconstruction="unknown")
+    with pytest.raises(ValueError, match="reconstruction"):
+        resample(image, source, reconstruction="unknown")
+    for factor in (0, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="pad_factor"):
+            resample(image, source, pad_factor=factor)
+    target = replace(source, center_x=2.3)
+    for mode in ("nearest", "linear", "cubic"):
+        actual = resample(image, target, reconstruction=mode)
+        expected = resample(replace(image, reconstruction=mode), target)
+        np.testing.assert_array_equal(actual.data, expected.data)
+        assert actual.reconstruction == "band_limited"
+    overridden = resample(
+        replace(image, reconstruction="linear"), target, reconstruction="band_limited"
+    )
+    np.testing.assert_array_equal(overridden.data, resample(image, target).data)
+    assert overridden.reconstruction == "linear"
+    np.testing.assert_allclose(
+        resample(
+            replace(image, reconstruction="linear"),
+            source,
+            reconstruction="band_limited",
+        ).data,
+        image.data,
+        rtol=0,
+        atol=3e-14,
+    )
+    assert resample(image, source).reconstruction == "band_limited"
+    # Area decreases, but x coarsens: an area-only rule would be wrong.
+    coarse = replace(source, basis=((1.2, 0), (0, 0.5)))
+    assert resample(image, coarse).reconstruction == "linear"
+    for basis in (((0.8, -0.6), (0.6, 0.8)), ((1, 0.2), (0, 1))):
+        rotated = replace(target, basis=basis)
+        with pytest.raises(NotImplementedError, match="rotated or sheared"):
+            resample(image, rotated)
+        for mode in ("nearest", "linear", "cubic"):
+            resample(image, rotated, reconstruction=mode)
+    oriented = replace(image, grid=replace(source, orientation=SkyOrientation(0)))
+    with pytest.raises(NotImplementedError, match="composed"):
+        resample(oriented, replace(source, orientation=SkyOrientation(27)))
+
+
+def test_band_limited_period_flux_and_nyquist():
+    """Fails if box integration loses DC flux or mixes real Nyquist axes.
+
+    Basis: a complete padded period integrates to the sample sum, to 100 eps.
+    Cropping is excluded. Even coarsening conserves this one integral, although
+    modes above the new Nyquist alias and must lose the band_limited label.
+    Nyquist cosines on an even grid must remain separable, not cos(x+y).
+    """
+    source = PixelGrid.regular((6, 8), 0.5, "arcsec")
+    rng = np.random.default_rng(0)
+    for dtype in (jnp.float32, jnp.float64):
+        image = Image(
+            jnp.asarray(rng.uniform(size=(2, 6, 8)), dtype=dtype),
+            source,
+            ("time",),
+            "per_pixel",
+            "flux",
+            "band_limited",
+        )
+        for shape, step in (((18, 24), 1 / 3), ((6, 8), 1)):
+            target = PixelGrid.regular(shape, step, "arcsec")
+            actual = resample(image, target)
+            np.testing.assert_allclose(
+                actual.data.sum(axis=(-2, -1)),
+                image.data.sum(axis=(-2, -1)),
+                rtol=100 * np.finfo(dtype).eps,
+                atol=0,
+            )
+            assert actual.reconstruction == ("band_limited" if step < 0.5 else "linear")
+    grid = PixelGrid.regular((4, 4), 1, "arcsec", center=(0, 0))
+    rows, cols = np.indices((4, 4))
+    checker = Image(
+        (-1.0) ** (rows + cols), grid, (), "per_unit_area", "flux", "band_limited"
+    )
+    shifted = replace(grid, center_x=-0.2, center_y=-0.3)
+    expected = np.cos(np.pi * (cols + 0.2)) * np.cos(np.pi * (rows + 0.3))
+    np.testing.assert_allclose(
+        resample(checker, shifted, pad_factor=1).data, expected, rtol=0, atol=4e-15
+    )
+
+
+def test_band_limited_jit_and_transpose_gradient():
+    """Fails if tracing changes values or the data derivative is not linear.
+
+    Basis: transpose of independently evaluated impulse responses, 200 eps;
+    finite differences additionally check both AD modes at 1e-8 in float64.
+    Batch axes, real/complex data, and both measures share one small geometry.
+    """
+    from jax.test_util import check_grads
+
+    source = PixelGrid.regular((3, 4), 0.7, "arcsec")
+    target = PixelGrid.regular((5, 6), 0.39, "arcsec", center=(2.2, 1.8))
+    rng = np.random.default_rng(0)
+    for dtype in (jnp.float32, jnp.float64, jnp.complex128):
+        for measure in ("per_unit_area", "per_pixel"):
+            data = jnp.asarray(rng.normal(size=(2, 3, 4)), dtype=dtype)
+            if jnp.iscomplexobj(data):
+                data = data + 0.2j * data[::-1]
+            image = Image(data, source, ("time",), measure, "flux", "band_limited")
+
+            def apply(values, image=image):
+                return resample(replace(image, data=values), target).data
+
+            eager = apply(data)
+            tolerance = 200 * np.finfo(data.real.dtype).eps
+            np.testing.assert_allclose(
+                jax.jit(apply)(data), eager, rtol=tolerance, atol=tolerance
+            )
+            weights = jnp.asarray(rng.normal(size=eager.shape), dtype=dtype)
+            gradient = jax.grad(
+                lambda d, weights=weights: jnp.real(jnp.sum(apply(d) * weights))
+            )(data)
+            impulses = jnp.eye(data.size, dtype=dtype).reshape((-1, *data.shape))
+            responses = jax.vmap(apply)(impulses)
+            expected = jnp.einsum("ibyx,byx->i", responses, weights).reshape(data.shape)
+            np.testing.assert_allclose(
+                gradient, expected, rtol=tolerance, atol=tolerance
+            )
+            if dtype == jnp.float64 and measure == "per_pixel":
+                check_grads(
+                    apply,
+                    (data,),
+                    order=1,
+                    modes=("fwd", "rev"),
+                    eps=1e-4,
+                    atol=1e-8,
+                    rtol=1e-8,
+                )
+
+
+def _circle_square_areas(grid, radius):
+    """Exact circle-square intersections from a signed quadrant primitive."""
+    x, y = map(np.asarray, grid.coordinates())
+    half = grid.step / 2
+
+    def primitive(x, y):
+        sign = np.sign(x) * np.sign(y)
+        x, y = np.minimum(abs(x), radius), np.minimum(abs(y), radius)
+        split = np.minimum(x, np.sqrt(np.maximum(radius**2 - y**2, 0)))
+
+        def segment(t):
+            return (
+                t * np.sqrt(np.maximum(radius**2 - t**2, 0))
+                + radius**2 * np.arcsin(t / radius)
+            ) / 2
+
+        return sign * (y * split + segment(x) - segment(split))
+
+    return (
+        primitive(x + half, y + half)
+        - primitive(x - half, y + half)
+        - primitive(x + half, y - half)
+        + primitive(x - half, y - half)
+    )
+
+
+def test_band_limited_airy_aperture(frame):
+    """Fails if Nyquist PSF photometry uses a local interpolation kernel.
+
+    Basis: analytic Airy encircled energy (code verification), plus a bound
+    derived from discarded wings and periodic replicas, not observed errors.
+    Set u=sqrt(x)*J1(x), q=1-3/(4*x*x). The Bessel ODE gives
+    (u'^2+q*u^2)'=q'*u^2>=0 and limiting energy 2/pi, hence
+    I(r)<=C/r^3 for r>=1, C=4/pi^3 (a conservative envelope).
+    On a padded square of side L, replica sup norm <=88*C/L^3: shell m
+    has 8m copies at distance >=L*(m-1/2), and sum m/(m-1/2)^3<=11.
+    Parseval and Cauchy-Schwarz bound the aperture error by
+    sqrt(A)*h*||discarded samples||_2 + (sqrt(A)*L+A)*replica_bound.
+
+    Each detector covers one full padded period. Its declared reconstruction
+    is evaluated on a fine 0.005 lambda/D aperture grid (no further padding),
+    with exact circle-square areas. Thus coarse aperture-edge quadrature is
+    excluded. The extra midpoint bound is O(h_fine^2): interior Hessian and
+    boundary-strip gradient terms, using the reconstructed Fourier coefficient
+    absolute sum to bound derivatives (each axis has bandwidth <=1).
+    This tests density photometry; exact per-pixel boxes are tested separately.
+    """
+    from scipy.special import j0, j1
+
+    def airy(x, y):
+        z = np.pi * np.hypot(x, y)
+        amplitude = np.where(z == 0, 1.0, 2 * j1(z) / np.where(z == 0, 1, z))
+        return np.pi / 4 * amplitude**2
+
+    radius = 0.7
+    source = PixelGrid.focal(32, 0.5, frame)
+    image = Image(
+        airy(*map(np.asarray, source.coordinates())),
+        source,
+        (),
+        "per_unit_area",
+        "fraction/lod2",
+        "band_limited",
+    )
+    expected = 1 - j0(np.pi * radius) ** 2 - j1(np.pi * radius) ** 2
+    aperture = PixelGrid.focal(282, 0.005, frame)
+    weights = _circle_square_areas(aperture, radius)
+    area = np.pi * radius**2
+    np.testing.assert_allclose(weights.sum(), area, rtol=0, atol=3e-14)
+    padded = PixelGrid.focal(64, 0.5, frame)
+    x, y = map(np.asarray, padded.coordinates())
+    wings = np.where((abs(x) >= 8) | (abs(y) >= 8), airy(x, y), 0)
+    period = 32
+    replicas = 88 * (4 / np.pi**3) / period**3
+    truncation_bound = (
+        np.sqrt(area) * 0.5 * np.linalg.norm(wings)
+        + (np.sqrt(area) * period + area) * replicas
+    )
+    coefficient_sum = np.abs(np.fft.fft2(np.pad(np.asarray(image.data), 16))).sum()
+    coefficient_sum /= 64**2
+    quadrature_bound = (
+        aperture.step**2
+        * coefficient_sum
+        * (area * (2 * np.pi) ** 2 / 6 + 8 * np.pi * radius * (2 * np.pi))
+    )
+    fluxes = []
+    for pitch in (0.2, 0.1, 0.05):
+        detector = PixelGrid.focal(round(period / pitch), pitch, frame)
+        row = []
+        for mode in ("band_limited", "linear"):
+            sampled = resample(replace(image, reconstruction=mode), detector)
+            fine = resample(sampled, aperture, pad_factor=1)
+            row.append(float(np.sum(np.asarray(fine.data) * weights)))
+        band_error, linear_error = (abs(value - expected) for value in row)
+        assert band_error <= truncation_bound + quadrature_bound
+        assert band_error * 20 < linear_error
+        fluxes.append(row)
+    assert np.ptp(np.asarray(fluxes)[:, 0]) <= truncation_bound
+    # Report the measured comparison without freezing it as a golden value.
+    print(
+        f"Airy analytic={expected:.12f}; bound={truncation_bound:.6g}"
+        f"+{quadrature_bound:.6g}; pitches/fluxes={fluxes}"
+    )
