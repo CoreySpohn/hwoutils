@@ -360,9 +360,10 @@ def _band_limited_matrix(
     n_source, positions, width, pad_factor, dtype, integrate, outside
 ):
     """Build one target-by-source DFT interpolation or box-integration matrix."""
-    positions = np.asarray(positions, dtype=dtype)
+    positions = np.asarray(positions)
     samples = np.arange(n_source, dtype=dtype)
     if outside == "reflect":
+        positions = positions.astype(dtype)
         # Pair opposite DFT modes of [d, d[::-1]]: its Nyquist mode is zero.
         frequencies = samples / np.asarray(2 * n_source, dtype=dtype)
         phase = np.asarray(2 * np.pi, dtype=dtype)
@@ -375,9 +376,17 @@ def _band_limited_matrix(
     n_padded = math.ceil(pad_factor * n_source)
     frequencies = np.fft.fftfreq(n_padded).astype(dtype)
     phase = np.asarray(2j * np.pi, dtype=np.result_type(dtype, np.complex64))
-    evaluate = np.exp(phase * positions[:, None] * frequencies)
     if integrate:
-        evaluate *= np.sinc(frequencies * np.asarray(width, dtype=dtype))
+        left = np.clip(positions - width / 2, -0.5, n_source - 0.5)
+        right = np.clip(positions + width / 2, -0.5, n_source - 0.5)
+        length = (right - left).astype(dtype)
+        positions = ((left + right) / 2).astype(dtype)
+        weights = (length / width)[:, None] * np.sinc(frequencies * length[:, None])
+    else:
+        weights = ((positions >= -0.5) & (positions <= n_source - 0.5))[:, None]
+        positions = np.clip(positions, -0.5, n_source - 0.5).astype(dtype)
+    evaluate = np.exp(phase * positions[:, None] * frequencies)
+    evaluate *= weights
     analyze = np.exp(-phase * frequencies[:, None] * samples)
     return (evaluate @ analyze) / n_padded
 
@@ -425,12 +434,17 @@ def resample(
     band_limited with outside='zero' uses the interpolant of a zero-padded array:
     data are assumed zero outside the source array. Each padded axis has
     P=ceil(pad_factor*N) samples (default 2; 1 means no padding). Padding
-    separates periodic copies; evaluation remains periodic with period P,
-    so it does not make arbitrarily distant target coordinates zero.
+    controls zero-extension accuracy inside the footprint [-1/2,N-1/2] on
+    each axis. The interpolant is restricted to that footprint and is exactly
+    zero outside it, regardless of the padded period. Point samples at the
+    boundary retain the interpolant value; box integrals clip at the boundary.
     With outside='reflect', use the even array [d, d[::-1]] of period P=2N;
     pad_factor applies only to zero extension and is ignored for reflection.
     Its paired DFT modes give cos(pi*k*(t+1/2)/N), k=0,...,N-1.
     The analysis weights are 1/N for DC and 2/N for the other cosine modes.
+    These modes are even about both -1/2 and N-1/2 and periodic with 2N,
+    so every exterior value is the repeated edge reflection, without an
+    independent translated copy or a zero-padded gap.
     At an edge a, the smooth even extension f(a+u)=f(a-u) matches values.
     Its one-sided slopes have opposite signs, leaving a slope jump in general.
     Integrating Fourier coefficients by parts twice gives O(k^-2) edge-error
@@ -442,7 +456,11 @@ def resample(
     Per-axis derivation, in source-pixel coordinates (sinc(z)=sin(pi*z)/(pi*z)):
     c_k = sum_n d_n exp(-2*pi*i*k*n/P) / P, with FFT-ordered k.
     A_jn = sum_k exp(2*pi*i*k*(t_j-n)/P) / P evaluates the density.
-    Averaging over width w multiplies each mode by sinc(k*w/P), giving B_jn.
+    For zero outside, intersect [t-w/2,t+w/2] with [-1/2,N-1/2] to get [a,b].
+    Let ell=max(b-a,0), m=(a+b)/2; empty intersections contribute zero.
+    Integral_a^b exp(2*pi*i*k*u/P) du = ell*exp(2*pi*i*k*m/P)*sinc(k*ell/P).
+    Thus B_jn=sum_k (ell/w)*sinc(k*ell/P)*exp(2*pi*i*k*(m-n)/P)/P.
+    For reflection use the full box: ell=w, m=t, and the cosine modes above.
     For per_unit_area return A_y @ data @ A_x.T at target centers.
     For per_pixel, density samples are data / source_pixel_area; integrating
     yields target_pixel_area/source_pixel_area * B_y @ data @ B_x.T.
@@ -453,10 +471,20 @@ def resample(
     and complex precision, then applied with JAX; integer inputs are promoted
     to floating point. float32 has a rounding floor (typically 1e-5 for small
     grids, increasing with phase arguments and matrix size); use float64 for
-    precision photometry. No clipping or flux renormalization is performed.
-    For zero extension, integrating a complete padded period conserves total
-    flux to roundoff, even when coarsened; cropping generally does not. Coarsening
-    aliases the density, so subsequent reconstruction need not conserve flux.
+    precision photometry. No positivity clamp or flux renormalization is used.
+    Footprint clipping creates a value jump unless the interpolant vanishes
+    at the edge: the restricted field is no longer globally band-limited.
+    A well-sampled Gaussian with negligible edges makes this cost small; for
+    sigma=0.8, center=(1,0), a 24x24 grid at 0.5 has its nearest edge 6.25 sigma
+    away (analytic edge/peak <3.3e-9, omitted Gaussian mass <2.1e-10).
+    With pad_factor=2 in float64, the reconstructed jump at (6,0) is about
+    -5.15e-7 of peak; the clipped integral differs from the sample sum by
+    3.58e-9 relative. float32 adds its rounding floor.
+    This is not a bound for undersampled PSFs or bright/truncated wings:
+    their edge jump and discarded interpolant tails can appreciably change
+    flux. Total flux is the integral over the footprint, not in general the
+    source sample sum. Coarsening aliases the density, so subsequent
+    reconstruction need not conserve flux.
 
     The output always retains outside. It retains the source reconstruction,
     regardless of an override, except that a band_limited source becomes linear

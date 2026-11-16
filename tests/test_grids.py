@@ -274,9 +274,9 @@ def test_band_limited_periodic_exactness():
         orientation=SkyOrientation(13, -1),
     )
     target = PixelGrid(
-        (11, 13),
+        (11, 12),
         5.7,
-        4.8,
+        4.5,
         ((0.23, 0), (0, 0.37)),
         "arcsec",
         orientation=SkyOrientation(13, 1),
@@ -308,7 +308,9 @@ def test_band_limited_periodic_exactness():
                 "flux",
                 "band_limited",
             )
-            for grid in (target, replace(source, center_x=3.57, center_y=2.31)):
+            # Keep complete boxes inside the footprint for this periodic oracle.
+            shifted = replace(source, shape=(5, 6), center_x=2.57, center_y=1.31)
+            for grid in (target, shifted):
                 expected = field(grid)
                 if measure == "per_pixel":
                     dx, dy = grid.basis[0][0], grid.basis[1][1]
@@ -388,8 +390,9 @@ def test_band_limited_metadata_and_overrides():
 def test_band_limited_period_flux_and_nyquist():
     """Fails if box integration loses DC flux or mixes real Nyquist axes.
 
-    Basis: a complete padded period integrates to the sample sum, to 100 eps.
-    Cropping is excluded. Even coarsening conserves this one integral, although
+    Basis: with pad_factor=1 the footprint is exactly one Fourier period, whose
+    integral is the sample sum to 100 eps. The target contains that footprint.
+    Even coarsening conserves this one integral, although
     modes above the new Nyquist alias and must lose the band_limited label.
     Nyquist cosines on an even grid must remain separable, not cos(x+y).
     """
@@ -406,7 +409,7 @@ def test_band_limited_period_flux_and_nyquist():
         )
         for shape, step in (((18, 24), 1 / 3), ((6, 8), 1)):
             target = PixelGrid.regular(shape, step, "arcsec")
-            actual = resample(image, target)
+            actual = resample(image, target, pad_factor=1)
             np.testing.assert_allclose(
                 actual.data.sum(axis=(-2, -1)),
                 image.data.sum(axis=(-2, -1)),
@@ -657,6 +660,11 @@ def test_reflect_band_limited_constant_and_cosine():
                 distant,
             )
             np.testing.assert_allclose(repeated.data, expected, rtol=tolerance, atol=0)
+            wide = PixelGrid.regular((21, 24), 0.5, "arcsec")
+            # Three times the source width in both axes, including both edges.
+            np.testing.assert_allclose(
+                resample(image, wide).data, 3 * source_area, rtol=tolerance, atol=0
+            )
 
 
 def test_reflect_smooth_interior_error():
@@ -732,6 +740,9 @@ def test_reflect_local_kernels_outside_footprint():
     on both sides of [1,3,7,13], half-sample reflection; binary-exact arithmetic.
     Equal and coarser pixels must sample the exterior for both measures.
     Refinement of a constant additionally checks area scaling at the edges.
+    Zero-extension stencils have finite support and cannot produce distant
+    copies. Linear/cubic can spill just past a half-sample edge; at x=-0.75
+    a unit constant has values 1/4 and 13/64, respectively, not zero.
     """
     source = PixelGrid.regular((4, 4), 0.5, "arcsec", center=(0, 0))
     values = np.array([1, 3, 7, 13])
@@ -765,4 +776,120 @@ def test_reflect_local_kernels_outside_footprint():
             flat = replace(image, data=jnp.ones(source.shape))
             np.testing.assert_array_equal(
                 resample(flat, fine).data, 0.25 if measure == "per_pixel" else 1
+            )
+        zero = Image(jnp.ones(source.shape), source, (), "per_unit_area", "flux", mode)
+        exterior = PixelGrid.regular((12, 12), 0.5, "arcsec", center=(4, 4))
+        actual = np.asarray(resample(zero, exterior).data)
+        expected = np.zeros((12, 12))
+        expected[4:8, 4:8] = 1
+        np.testing.assert_array_equal(actual, expected)
+        edge = PixelGrid.regular((1, 1), 0.5, "arcsec", center=(0.75, -1))
+        np.testing.assert_array_equal(
+            resample(zero, edge).data,
+            {"nearest": 0, "linear": 1 / 4, "cubic": 13 / 64}[mode],
+        )
+
+
+def test_band_limited_zero_wide_gaussian(frame):
+    """Fails if exterior target positions see periodic copies of a PSF.
+
+    Basis: sigma=0.8 lambda/D at (1,0), sampled at 0.5 on 24x24, has its
+    nearest edge 6.25 sigma away. The omitted analytic mass is <2.1e-10;
+    Fourier truncation adds <1e-7 relative (float64 spike). The requested
+    16 float32 eps allowance covers reconstruction and rounding. Both target
+    pitches partition the entire source footprint, so their exact box sums
+    must agree. Point samples outside and boxes wholly outside are exactly
+    zero; outside-centered straddlers must still integrate their overlap.
+    Two target shapes exercise refinement and coarsening; 64x64 at 0.85
+    spans over two padded periods and used to integrate about nine copies.
+    """
+    source = PixelGrid.focal(24, 0.5, frame)
+    x, y = map(np.asarray, source.coordinates())
+    density = np.exp(-((x - 1) ** 2 + y**2) / (2 * 0.8**2))
+    for dtype in (jnp.float32, jnp.float64):
+        image = Image(
+            jnp.asarray(density * 0.5**2, dtype=dtype),
+            source,
+            (),
+            "per_pixel",
+            "fraction",
+            "band_limited",
+        )
+        for n, pitch in ((64, 0.25), (40, 0.85), (64, 0.85)):
+            target = PixelGrid.focal(n, pitch, frame)
+            result = np.asarray(resample(image, target).data)
+            source_sum = np.asarray(image.data).sum(dtype=np.float64)
+            np.testing.assert_allclose(
+                result.sum(dtype=np.float64),
+                source_sum,
+                rtol=16 * np.finfo(np.float32).eps,
+                atol=0,
+            )
+            tx, ty = map(np.asarray, target.coordinates())
+            outside_centers = (abs(tx) > 6) | (abs(ty) > 6)
+            outside_boxes = (abs(tx) - pitch / 2 >= 6) | (abs(ty) - pitch / 2 >= 6)
+            assert outside_boxes.any()
+            np.testing.assert_array_equal(result[outside_boxes], 0)
+            points = resample(
+                replace(image, data=image.data / 0.5**2, measure="per_unit_area"),
+                target,
+            )
+            np.testing.assert_array_equal(np.asarray(points.data)[outside_centers], 0)
+            print(
+                f"Gaussian {dtype} {n}x{n} pitch={pitch}: relative flux error="
+                f"{result.sum(dtype=np.float64) / source_sum - 1:.9g}"
+            )
+
+
+def test_band_limited_zero_clipped_boxes():
+    """Fails if a straddling box is masked by its center or uses its full width.
+
+    Basis: pad_factor=1 makes a constant density exactly constant inside;
+    its flux is density times the rectangular overlap area, in closed form.
+    A separable sine additionally checks the phase of a clipped non-DC mode
+    using its cosine antiderivative. 200 eps covers small DFT matrix rounding.
+    Non-unit, unequal axis widths, both edges, corners, outside centers,
+    a box containing the whole source, and complex values share two shapes.
+    """
+    source = PixelGrid.regular((4, 4), 0.5, "arcsec")
+    x, y = map(np.asarray, source.coordinates())
+    for dtype in (jnp.float32, jnp.complex128):
+        amplitude = 3 + 2j if dtype == jnp.complex128 else 3
+        density = jnp.full(source.shape, amplitude, dtype=dtype)
+        image = Image(density * 0.5**2, source, (), "per_pixel", "flux", "band_limited")
+        # Static geometry must not round exterior points onto an edge in float32.
+        exterior = PixelGrid.regular((2, 2), 2 + 2e-9, "arcsec")
+        np.testing.assert_array_equal(
+            resample(
+                replace(image, data=density, measure="per_unit_area"), exterior
+            ).data,
+            0,
+        )
+        for basis in (((0.75, 0), (0, -1.25)), ((5, 0), (0, 6))):
+            target = PixelGrid((5, 5), 2.25, 1.75, basis, "arcsec")
+            tx, ty = map(np.asarray, target.coordinates())
+            wx, wy = abs(basis[0][0]), abs(basis[1][1])
+            ax, bx = np.clip(tx - wx / 2, -1, 1), np.clip(tx + wx / 2, -1, 1)
+            ay, by = np.clip(ty - wy / 2, -1, 1), np.clip(ty + wy / 2, -1, 1)
+            expected = amplitude * (bx - ax) * (by - ay)
+            tolerance = 200 * np.finfo(density.real.dtype).eps
+            actual = np.asarray(resample(image, target, pad_factor=1).data)
+            np.testing.assert_allclose(actual, expected, rtol=tolerance, atol=tolerance)
+            empty = (bx == ax) | (by == ay)
+            np.testing.assert_array_equal(actual[empty], 0)
+            if wx < 1:
+                straddlers = (abs(tx) > 1) & (bx > ax) & (by > ay)
+                assert straddlers.any()
+                assert np.all(abs(actual[straddlers]) > 0)
+            field = amplitude * (1 + 0.2 * np.sin(np.pi * x) * np.sin(np.pi * y))
+            sine_x = (np.cos(np.pi * ax) - np.cos(np.pi * bx)) / np.pi
+            sine_y = (np.cos(np.pi * ay) - np.cos(np.pi * by)) / np.pi
+            expected += 0.2 * amplitude * sine_x * sine_y
+            sampled = resample(
+                replace(image, data=jnp.asarray(field * 0.5**2, dtype=dtype)),
+                target,
+                pad_factor=1,
+            )
+            np.testing.assert_allclose(
+                sampled.data, expected, rtol=tolerance, atol=tolerance
             )
