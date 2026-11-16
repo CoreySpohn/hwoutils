@@ -303,18 +303,21 @@ class GridArray:
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True, eq=False)
 class Image(GridArray):
-    """Image values with static measure, reconstruction, and quantity unit label.
+    """Image values with static measure, reconstruction, outside, and unit label.
 
     measure='per_pixel' means integrated pixel flux; 'per_unit_area' means
     density in the grid unit squared. quantity labels the stored data unit.
     reconstruction declares how samples define a continuous density: nearest,
     linear (default), Keys cubic, or band_limited. For band_limited per-pixel
     data, data / pixel_area are density samples, not deconvolved box averages.
+    outside declares the extension beyond the array: zero (default) or reflect
+    (even symmetry about the half-sample edges, repeated with period 2N).
     """
 
     measure: str
     quantity: str
     reconstruction: str = "linear"
+    outside: str = "zero"
 
     def __post_init__(self):
         """Validate array geometry and the interpretation of image values."""
@@ -322,6 +325,8 @@ class Image(GridArray):
         if self.measure not in ("per_pixel", "per_unit_area"):
             raise ValueError("measure must be 'per_pixel' or 'per_unit_area'")
         _validate_reconstruction(self.reconstruction)
+        if self.outside not in ("zero", "reflect"):
+            raise ValueError("outside must be 'zero' or 'reflect'")
         if not isinstance(self.quantity, str) or not self.quantity.strip():
             raise ValueError("quantity must be a nonempty unit string")
 
@@ -351,12 +356,24 @@ def _pixel_map(source, target):
     return np.linalg.solve(np.asarray(source.basis), transform @ target.basis)
 
 
-def _band_limited_matrix(n_source, positions, width, pad_factor, dtype, integrate):
+def _band_limited_matrix(
+    n_source, positions, width, pad_factor, dtype, integrate, outside
+):
     """Build one target-by-source DFT interpolation or box-integration matrix."""
-    n_padded = math.ceil(pad_factor * n_source)
-    frequencies = np.fft.fftfreq(n_padded).astype(dtype)
     positions = np.asarray(positions, dtype=dtype)
     samples = np.arange(n_source, dtype=dtype)
+    if outside == "reflect":
+        # Pair opposite DFT modes of [d, d[::-1]]: its Nyquist mode is zero.
+        frequencies = samples / np.asarray(2 * n_source, dtype=dtype)
+        phase = np.asarray(2 * np.pi, dtype=dtype)
+        evaluate = np.cos(phase * (positions[:, None] + 0.5) * frequencies)
+        if integrate:
+            evaluate *= np.sinc(frequencies * np.asarray(width, dtype=dtype))
+        analyze = np.cos(phase * frequencies[:, None] * (samples + 0.5))
+        analyze[0] *= 0.5
+        return (evaluate @ analyze) * np.asarray(2 / n_source, dtype=dtype)
+    n_padded = math.ceil(pad_factor * n_source)
+    frequencies = np.fft.fftfreq(n_padded).astype(dtype)
     phase = np.asarray(2j * np.pi, dtype=np.result_type(dtype, np.complex64))
     evaluate = np.exp(phase * positions[:, None] * frequencies)
     if integrate:
@@ -383,11 +400,12 @@ def resample(
     operation only. nearest, linear, and cubic use the existing kernels.
     reconstruction and pad_factor must be static when supplied under jit.
     Per-unit-area values sample the source reconstruction at target pixel
-    centers, with zero outside the source.
+    centers, extending source indices according to image.outside: zero or
+    half-sample reflection, d[-1-n]=d[n] and d[N+n]=d[N-1-n], periodically.
 
-    For these three kernels, per-pixel flux uses two forms, chosen on the host from
-    the pixel areas. When the target pixels are smaller than the source
-    pixels (refinement) the flux is converted to a density, sampled at
+    For these three kernels with outside='zero', per-pixel flux uses two forms,
+    chosen on the host from the pixel areas. When target pixels are smaller
+    than source pixels (refinement) the flux is converted to a density, sampled at
     target centers and multiplied by the target pixel area, which is the
     model of ``transforms.resample_flux`` with explicit centers and bases:
     the result is smooth, and the sum is conserved up to sampling error
@@ -399,12 +417,25 @@ def resample(
     nonzero source pixel's stencil. Cropping loses flux in both forms.
     Neither is a pixel-footprint integral; use ``transforms.rebin_flux``
     for that on centered, axis-aligned grids.
+    With outside='reflect', these kernels always sample the extended density
+    and multiply by target pixel area, including when coarsening. Deposition
+    of only the finite source would omit the reflected exterior. This center
+    approximation is not an exact box integral or a flux-conservation guarantee.
 
-    band_limited uses the trigonometric interpolant of a zero-padded array:
+    band_limited with outside='zero' uses the interpolant of a zero-padded array:
     data are assumed zero outside the source array. Each padded axis has
     P=ceil(pad_factor*N) samples (default 2; 1 means no padding). Padding
     separates periodic copies; evaluation remains periodic with period P,
     so it does not make arbitrarily distant target coordinates zero.
+    With outside='reflect', use the even array [d, d[::-1]] of period P=2N;
+    pad_factor applies only to zero extension and is ignored for reflection.
+    Its paired DFT modes give cos(pi*k*(t+1/2)/N), k=0,...,N-1.
+    The analysis weights are 1/N for DC and 2/N for the other cosine modes.
+    At an edge a, the smooth even extension f(a+u)=f(a-u) matches values.
+    Its one-sided slopes have opposite signs, leaving a slope jump in general.
+    Integrating Fourier coefficients by parts twice gives O(k^-2) edge-error
+    amplitudes, versus O(k^-1) from a value jump under zero extension. These
+    are spectral rates; a summed tail right at a slope corner can be O(K^-1).
     Both bases and the composed target-to-source map must be diagonal;
     rotation or shear raises NotImplementedError. Reflections are supported.
 
@@ -423,13 +454,14 @@ def resample(
     to floating point. float32 has a rounding floor (typically 1e-5 for small
     grids, increasing with phase arguments and matrix size); use float64 for
     precision photometry. No clipping or flux renormalization is performed.
-    Integrating a complete padded period conserves per-pixel total flux to
-    roundoff, even when coarsened; cropping generally does not. Coarsening
+    For zero extension, integrating a complete padded period conserves total
+    flux to roundoff, even when coarsened; cropping generally does not. Coarsening
     aliases the density, so subsequent reconstruction need not conserve flux.
 
-    The output retains the source declaration, regardless of an override,
-    except that a band_limited source becomes linear when the target Nyquist
-    region cannot contain its source frequency box. If p_source=M*p_target+b,
+    The output always retains outside. It retains the source reconstruction,
+    regardless of an override, except that a band_limited source becomes linear
+    when the target Nyquist region cannot contain its source frequency box.
+    If p_source=M*p_target+b,
     target frequencies are M.T*f_source; the condition is each column's
     absolute sum <= 1 (for a diagonal M, each absolute spacing ratio <= 1).
     Coarsening either axis fails this guarantee even if pixel area decreases.
@@ -455,6 +487,7 @@ def resample(
         image.measure,
         image.quantity,
         output_reconstruction,
+        image.outside,
     )
     area_ratio = target_grid.pixel_area / source_grid.pixel_area
     data = jnp.asarray(image.data, dtype=jnp.result_type(image.data, 1.0))
@@ -467,9 +500,10 @@ def resample(
                     "band_limited reconstruction does not support rotated or sheared "
                     "grid bases or composed maps"
                 )
-        pad_factor = float(pad_factor)
-        if not math.isfinite(pad_factor) or pad_factor < 1:
-            raise ValueError("pad_factor must be finite and at least 1")
+        if image.outside == "zero":
+            pad_factor = float(pad_factor)
+            if not math.isfinite(pad_factor) or pad_factor < 1:
+                raise ValueError("pad_factor must be finite and at least 1")
         matrices = []
         for axis, source_center, target_center in (
             (0, source_grid.center_x, target_grid.center_x),
@@ -486,6 +520,7 @@ def resample(
                 pad_factor,
                 data.real.dtype,
                 image.measure == "per_pixel",
+                image.outside,
             )
             # A real cosine choice on EACH axis avoids a mixed Nyquist term.
             if not jnp.iscomplexobj(data):
@@ -497,7 +532,9 @@ def resample(
             data = data * area_ratio
         return Image.tree_unflatten(metadata, (data,))
     order = {"nearest": 0, "linear": 1, "cubic": 3}[selected]
-    deposit_flux = image.measure == "per_pixel" and area_ratio >= 1.0
+    deposit_flux = (
+        image.outside == "zero" and image.measure == "per_pixel" and area_ratio >= 1.0
+    )
     scale = area_ratio if image.measure == "per_pixel" and not deposit_flux else 1.0
     # Sampling maps target centers into source pixels; deposition maps
     # source centers into target pixels and applies the kernel's transpose.
@@ -520,7 +557,12 @@ def resample(
                 sample_target, jnp.zeros(target_grid.shape, dtype=plane.dtype)
             )
             return deposit(plane)[0]
-        return map_coordinates(plane, (pixels.y, pixels.x), order=order)
+        return map_coordinates(
+            plane,
+            (pixels.y, pixels.x),
+            order=order,
+            mode="reflect" if image.outside == "reflect" else "constant",
+        )
 
     for _ in range(data.ndim - 2):
         interpolate = jax.vmap(interpolate)

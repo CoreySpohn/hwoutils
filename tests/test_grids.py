@@ -431,19 +431,28 @@ def test_band_limited_jit_and_transpose_gradient():
 
     Basis: transpose of independently evaluated impulse responses, 200 eps;
     finite differences additionally check both AD modes at 1e-8 in float64.
-    Batch axes, real/complex data, and both measures share one small geometry.
+    Batch axes, real/complex data, both extensions, and both measures share one
+    small geometry. Reflection adds real and complex float64 transform programs.
     """
     from jax.test_util import check_grads
 
     source = PixelGrid.regular((3, 4), 0.7, "arcsec")
     target = PixelGrid.regular((5, 6), 0.39, "arcsec", center=(2.2, 1.8))
     rng = np.random.default_rng(0)
-    for dtype in (jnp.float32, jnp.float64, jnp.complex128):
+    for dtype, outside in (
+        (jnp.float32, "zero"),
+        (jnp.float64, "zero"),
+        (jnp.complex128, "zero"),
+        (jnp.float64, "reflect"),
+        (jnp.complex128, "reflect"),
+    ):
         for measure in ("per_unit_area", "per_pixel"):
             data = jnp.asarray(rng.normal(size=(2, 3, 4)), dtype=dtype)
             if jnp.iscomplexobj(data):
                 data = data + 0.2j * data[::-1]
-            image = Image(data, source, ("time",), measure, "flux", "band_limited")
+            image = Image(
+                data, source, ("time",), measure, "flux", "band_limited", outside
+            )
 
             def apply(values, image=image):
                 return resample(replace(image, data=values), target).data
@@ -578,3 +587,182 @@ def test_band_limited_airy_aperture(frame):
         f"Airy analytic={expected:.12f}; bound={truncation_bound:.6g}"
         f"+{quadrature_bound:.6g}; pitches/fluxes={fluxes}"
     )
+
+
+def test_reflect_band_limited_constant_and_cosine():
+    """Fails if reflection pads with zeros or uses whole-sample symmetry.
+
+    Basis: constant density and half-sample cosine modes are exact solutions,
+    including analytic box integrals. 200 eps covers phase/reduction rounding
+    in both precisions. The zero-extension negative control must ring >1e-5
+    within three source pixels of an edge, inside the source footprint.
+    Odd/even rectangular axes and non-unit areas expose axis and scale errors.
+    """
+    source = PixelGrid.regular((7, 8), 0.5, "arcsec", center=(0, 0))
+    target = PixelGrid.regular((13, 15), 0.23, "arcsec", center=(2.3, -2.2))
+    sy, sx = np.indices(source.shape)
+    tx, ty = map(np.asarray, target.coordinates())
+    tx, ty = tx / 0.5, ty / 0.5
+    # Pixel [6, 3] is 0.822 source pixels from the left half-sample edge.
+    assert 0 < tx[6, 3] + 0.5 < 3
+    assert -0.5 < ty[6, 3] < 6.5
+    for dtype in (jnp.float32, jnp.float64):
+        for measure in ("per_unit_area", "per_pixel"):
+            source_area = 0.5**2 if measure == "per_pixel" else 1
+            target_area = 0.23**2 if measure == "per_pixel" else 1
+            image = Image(
+                jnp.full(source.shape, 3 * source_area, dtype=dtype),
+                source,
+                (),
+                measure,
+                "flux",
+                "band_limited",
+                "reflect",
+            )
+            actual = resample(image, target)
+            assert actual.data.dtype == dtype
+            tolerance = 200 * np.finfo(dtype).eps
+            np.testing.assert_allclose(
+                actual.data, 3 * target_area, rtol=tolerance, atol=0
+            )
+            ringing = resample(replace(image, outside="zero"), target).data[6, 3]
+            assert abs(float(ringing) / (3 * target_area) - 1) > 1e-5
+            # Exact nonconstant even interpolant; kx=2, ky=1, below Nyquist.
+            values = 3 + np.cos(np.pi * 2 * (sx + 0.5) / 8) * np.cos(
+                np.pi * (sy + 0.5) / 7
+            )
+            box = (
+                np.sinc(2 * (0.23 / 0.5) / 16) * np.sinc((0.23 / 0.5) / 14)
+                if measure == "per_pixel"
+                else 1
+            )
+            expected = target_area * (
+                3
+                + box
+                * np.cos(np.pi * 2 * (tx + 0.5) / 8)
+                * np.cos(np.pi * (ty + 0.5) / 7)
+            )
+            actual = resample(
+                replace(image, data=jnp.asarray(values * source_area, dtype=dtype)),
+                target,
+            )
+            np.testing.assert_allclose(actual.data, expected, rtol=tolerance, atol=0)
+            distant = replace(
+                target,
+                center_x=target.center_x + 16 * 0.5 / 0.23,
+                center_y=target.center_y - 14 * 0.5 / 0.23,
+            )
+            repeated = resample(
+                replace(image, data=jnp.asarray(values * source_area, dtype=dtype)),
+                distant,
+            )
+            np.testing.assert_allclose(repeated.data, expected, rtol=tolerance, atol=0)
+
+
+def test_reflect_smooth_interior_error():
+    """Fails if a nonzero edge still imposes the zero-padding discontinuity.
+
+    Basis: analytic polynomial times Gaussian; all targets are >4 source
+    pixels inside the edges. The requested 10x RMS improvement is a negative
+    control threshold (spike: ~370x), not a universal convergence-rate claim.
+    No periodicity or vanishing edge is imposed on the analytic field.
+    """
+    source = PixelGrid.regular((32, 30), 0.125, "arcsec")
+    target = PixelGrid.regular((37, 35), 0.071, "arcsec", center=(17.13, 18.27))
+
+    def field(grid):
+        x, y = map(np.asarray, grid.coordinates())
+        return (1 + 0.1 * x + 0.03 * y + 0.02 * x * y) * np.exp(-0.08 * (x * x + y * y))
+
+    image = Image(field(source), source, (), "per_unit_area", "flux", "band_limited")
+    expected = field(target)
+    errors = [
+        np.sqrt(
+            np.mean(
+                (
+                    np.asarray(resample(replace(image, outside=mode), target).data)
+                    - expected
+                )
+                ** 2
+            )
+        )
+        for mode in ("zero", "reflect")
+    ]
+    assert errors[1] * 10 < errors[0]
+    print(f"Smooth interior RMS zero={errors[0]:.9g}, reflect={errors[1]:.9g}")
+
+
+def test_outside_metadata_and_padding():
+    """Fails if static outside is lost in transforms or changes the wrong path.
+
+    Basis: exact metadata and unchanged arrays when an ignored pad_factor
+    changes. A jitted resample includes both PyTree input and output rebuilds;
+    coarsening must keep outside even when reconstruction becomes linear.
+    """
+    grid = PixelGrid.regular((4, 5), 0.5, "arcsec")
+    image = Image(jnp.arange(20.0).reshape(4, 5), grid, (), "per_unit_area", "flux")
+    assert image.outside == "zero"
+    with pytest.raises(ValueError, match="outside"):
+        replace(image, outside="unknown")
+    image = replace(image, outside="reflect", reconstruction="band_limited")
+    coarse = replace(grid, basis=((1, 0), (0, 1)))
+    eager = resample(image, coarse)
+    compiled = jax.jit(resample)(image, coarse)
+    np.testing.assert_allclose(compiled.data, eager.data, rtol=0, atol=1e-14)
+    for result in (
+        jax.jit(lambda im: im)(image),
+        jax.tree.map(lambda d: d * 2, image),
+        replace(image, quantity="density"),
+        eager,
+        compiled,
+        resample(image, grid, reconstruction="linear"),
+    ):
+        assert result.outside == "reflect"
+    assert eager.reconstruction == "linear"
+    for factor in (1, 3, float("nan")):
+        np.testing.assert_array_equal(
+            resample(image, coarse, pad_factor=factor).data, eager.data
+        )
+
+
+def test_reflect_local_kernels_outside_footprint():
+    """Fails if local kernels use zero/mirror boundaries or deposit finite flux.
+
+    Basis: hand-evaluated nearest, linear and Keys stencils at quarter offsets
+    on both sides of [1,3,7,13], half-sample reflection; binary-exact arithmetic.
+    Equal and coarser pixels must sample the exterior for both measures.
+    Refinement of a constant additionally checks area scaling at the edges.
+    """
+    source = PixelGrid.regular((4, 4), 0.5, "arcsec", center=(0, 0))
+    values = np.array([1, 3, 7, 13])
+    samples = values[None, :] + 2 * values[:, None]
+    expected_rows = {
+        "nearest": np.array([1, 1, 3, 7, 13, 13]),
+        "linear": np.array([1.5, 1, 2.5, 6, 11.5, 13]),
+        "cubic": np.array([1.3125, 0.8125, 2.3125, 5.8125, 11.875, 13.5625]),
+    }
+    for mode, row in expected_rows.items():
+        for measure in ("per_unit_area", "per_pixel"):
+            image = Image(samples, source, (), measure, "flux", mode, "reflect")
+            for ratio in (1, 2):
+                target = PixelGrid.regular(
+                    (6 // ratio, 6 // ratio),
+                    0.5 * ratio,
+                    "arcsec",
+                    center=(1.25 / ratio, 1.25 / ratio),
+                )
+                expected = row[None, ::ratio] + 2 * row[::ratio, None]
+                if measure == "per_pixel":
+                    expected *= ratio**2
+                np.testing.assert_array_equal(resample(image, target).data, expected)
+                distant = replace(
+                    target,
+                    center_x=target.center_x + 8 / ratio,
+                    center_y=target.center_y - 16 / ratio,
+                )
+                np.testing.assert_array_equal(resample(image, distant).data, expected)
+            fine = PixelGrid.regular((10, 10), 0.25, "arcsec")
+            flat = replace(image, data=jnp.ones(source.shape))
+            np.testing.assert_array_equal(
+                resample(flat, fine).data, 0.25 if measure == "per_pixel" else 1
+            )
