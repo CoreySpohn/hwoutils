@@ -1,11 +1,11 @@
 """hwoutils -- Shared JAX-based utilities for the HWO simulation suite."""
 
+from importlib import import_module as _import_module
+
 try:
     from hwoutils._version import version as __version__
 except ModuleNotFoundError:
     __version__ = "unknown"
-
-from hwoutils.jax_config import enable_x64, set_host_device_count, set_platform
 
 __all__ = [
     "__version__",
@@ -13,3 +13,17 @@ __all__ = [
     "set_host_device_count",
     "set_platform",
 ]
+
+
+def __getattr__(name):
+    """Load JAX configuration exports only when requested."""
+    if name in __all__ and name != "__version__":
+        value = getattr(_import_module("hwoutils.jax_config"), name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    """Include lazy public exports in interactive discovery."""
+    return sorted(set(globals()) | set(__all__))

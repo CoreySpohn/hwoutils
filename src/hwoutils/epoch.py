@@ -18,8 +18,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from hwoutils.constants import d2s
+
 _SCALES = ("tdb", "tt", "tcb", "tai", "utc")
-_DAY_S = 86400.0
 
 
 @dataclass(frozen=True)
@@ -79,9 +80,9 @@ class Epoch:
 
 def days_to_seconds(time_d):
     """Convert an offset in days to seconds (works on traced arrays)."""
-    return time_d * _DAY_S
+    return time_d * d2s
 
 
 def seconds_to_days(time_s):
     """Convert an offset in seconds to days (works on traced arrays)."""
-    return time_s / _DAY_S
+    return time_s / d2s

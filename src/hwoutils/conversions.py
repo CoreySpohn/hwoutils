@@ -1,12 +1,12 @@
 """Unit conversion functions using centralized constants.
 
-Pure JAX implementations -- no astropy dependency. Functions are intentionally
-NOT JIT-compiled so JAX can fuse them into larger computation graphs.
+Arithmetic functions accept Python scalars, NumPy arrays and JAX arrays.
+Only logarithmic and calendar functions load JAX, on first call. Functions
+are not JIT-compiled so JAX can fuse them into larger computation graphs.
 """
 
-import jax.numpy as jnp
-
 from hwoutils import constants as const
+from hwoutils.constants import AB_ZERO_POINT_JY as AB_ZERO_POINT_JY
 
 # ---------------------------------------------------------------------------
 # Flux conversions
@@ -39,10 +39,28 @@ def photons_per_nm_per_m2_to_jy(flux_phot, wavelength_nm):
     return flux_phot * (wavelength_nm * const.h) / const.Jy
 
 
-# AB zero point: astropy's exact 10**(-0.4 * 48.60) erg/s/cm^2/Hz in Jy,
-# not the rounded nominal 3631 Jy. Keeps these helpers bit-consistent with
-# astropy's ABmag.to(u.Jy) (cross-validated in test_astropy_crossval).
-AB_ZERO_POINT_JY = 3630.7805477010028
+def photons_per_nm_per_m2_to_w_per_nm_per_m2(flux_phot, wavelength_nm):
+    """Convert photons/s/nm/m^2 to W/nm/m^2, retaining any per-sr factor."""
+    return flux_phot * (const.h * const.c / const.nm2m) / wavelength_nm
+
+
+def w_per_nm_per_m2_to_photons_per_nm_per_m2(flux_w, wavelength_nm):
+    """Convert W/nm/m^2 to photons/s/nm/m^2, retaining any per-sr factor."""
+    return flux_w * wavelength_nm / (const.h * const.c / const.nm2m)
+
+
+def w_per_nm_per_m2_to_cgs_per_wavenumber(flux_w, wavelength_nm):
+    """Convert W/m^2/nm to erg/s/cm^2/(cm^-1), retaining any per-sr factor.
+
+    Apply |d(lambda_nm)/d(nu_cm)| = lambda_nm^2 / cm2nm.
+    This changes the density coordinate only, with no solid-angle integral.
+    """
+    return flux_w * (const.J2erg * const.cm22m2 / const.cm2nm) * wavelength_nm**2
+
+
+def cgs_per_wavenumber_to_w_per_nm_per_m2(flux_cgs, wavelength_nm):
+    """Convert erg/s/cm^2/(cm^-1) to W/m^2/nm, retaining any per-sr factor."""
+    return flux_cgs / wavelength_nm**2 / (const.J2erg * const.cm22m2 / const.cm2nm)
 
 
 def mag_to_flux_jy(mag):
@@ -52,6 +70,8 @@ def mag_to_flux_jy(mag):
 
 def flux_jy_to_mag(flux_jy):
     """Flux density in Jansky to AB magnitude."""
+    import jax.numpy as jnp
+
     return -2.5 * jnp.log10(flux_jy / AB_ZERO_POINT_JY)
 
 
@@ -278,6 +298,20 @@ def arcsec_to_au(angle_arcsec, distance_pc):
 # ---------------------------------------------------------------------------
 
 
+def jd_to_mjd(time_jd):
+    """Convert Julian Date to Modified Julian Date without changing time scale.
+
+    Inputs are scalars or arrays; absolute dates need float64 for sub-day
+    precision. For two-part dates use Epoch.days with Epoch(MJD_ZERO_JD).
+    """
+    return time_jd - const.MJD_ZERO_JD
+
+
+def mjd_to_jd(time_mjd):
+    """Convert Modified Julian Date to Julian Date without changing time scale."""
+    return time_mjd + const.MJD_ZERO_JD
+
+
 def years_to_days(time_years):
     """Convert years to days."""
     return time_years * 365.25
@@ -323,6 +357,8 @@ def gregorian_to_jd(year, month, day):
     Returns:
         The Julian day.
     """
+    import jax.numpy as jnp
+
     a = jnp.floor((14 - month) / 12)
     y = year + 4800 - a
     m = month + 12 * a - 3
@@ -347,6 +383,8 @@ def jd_to_decimal_year(jd):
     Returns:
         The decimal year.
     """
+    import jax.numpy as jnp
+
     year_approx = 1970.0 + (jd - 2440587.5) / 365.2425
     year = jnp.floor(year_approx)
 
@@ -369,6 +407,8 @@ def decimal_year_to_jd(decimal_year):
     Returns:
         The Julian day.
     """
+    import jax.numpy as jnp
+
     year = jnp.floor(decimal_year)
     year_fraction = decimal_year - year
 

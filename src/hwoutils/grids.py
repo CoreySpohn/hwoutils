@@ -16,6 +16,7 @@ import numpy as np
 
 from hwoutils.conversions import lambda_d_to_arcsec
 from hwoutils.map_coordinates import map_coordinates
+from hwoutils.radial import get_center
 
 
 class _XY(NamedTuple):
@@ -148,7 +149,8 @@ class PixelGrid:
     def regular(cls, shape, step, unit, *, center=None, frame=None, orientation=None):
         """Make an axis-aligned isotropic grid; center defaults to geometric (x,y)."""
         if center is None:
-            center = ((shape[1] - 1) / 2, (shape[0] - 1) / 2)
+            cy, cx = get_center(shape)
+            center = (cx, cy)
         step = float(step)
         if not math.isfinite(step) or step <= 0:
             raise ValueError("step must be positive and finite")
@@ -215,6 +217,17 @@ class PixelGrid:
         return _XY(
             (d * x - b * y) / det + self.center_x, (a * y - c * x) / det + self.center_y
         )
+
+    @property
+    def is_geometric(self) -> bool:
+        """Whether the center is exactly ((nx-1)/2, (ny-1)/2), in pixels.
+
+        Tolerance is zero: integer and half-integer centers are exactly
+        representable, and even a small displacement breaks pixel-flip
+        symmetry. This does not constrain the basis or orientation.
+        """
+        cy, cx = get_center(self.shape)
+        return self.center_x == cx and self.center_y == cy
 
     @property
     def step(self) -> float:

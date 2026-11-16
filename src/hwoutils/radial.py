@@ -8,6 +8,11 @@ import jax
 import jax.numpy as jnp
 
 
+def get_center(shape: tuple[int, int]) -> tuple[float, float]:
+    """Return the zero-indexed geometric center (cy, cx) of shape (ny, nx)."""
+    return ((shape[0] - 1) / 2.0, (shape[1] - 1) / 2.0)
+
+
 def radial_distance(
     shape: tuple[int, int],
     center: tuple[float, float] | None = None,
@@ -24,7 +29,7 @@ def radial_distance(
     """
     ny, nx = shape
     if center is None:
-        center = ((ny - 1) / 2.0, (nx - 1) / 2.0)
+        center = get_center(shape)
     cy, cx = center
 
     y, x = jnp.ogrid[:ny, :nx]

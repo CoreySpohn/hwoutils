@@ -2,18 +2,18 @@
 
 Single source of truth for all constants used across the HWO simulation suite
 (yippy, orbix, coronagraphoto, coronalyze, hwosim). All values are plain floats
-or JAX arrays -- no astropy.units dependency.
+-- no array-library or astropy.units dependency.
 """
 
-import jax.numpy as jnp
+import math
 
 # ---------------------------------------------------------------------------
 # Mathematical constants
 # ---------------------------------------------------------------------------
-two_pi = 2 * jnp.pi
-pi_over_2 = jnp.pi / 2
-eps = jnp.finfo(jnp.float32).eps
-GAUSSIAN_FWHM_FACTOR = 2 * jnp.sqrt(2 * jnp.log(2))  # sigma to FWHM
+two_pi = 2 * math.pi
+pi_over_2 = math.pi / 2
+eps = 2.0**-23  # IEEE 754 binary32 machine epsilon
+GAUSSIAN_FWHM_FACTOR = 2 * math.sqrt(2 * math.log(2))  # sigma to FWHM
 
 # ---------------------------------------------------------------------------
 # Fundamental physical constants (SI)
@@ -33,6 +33,9 @@ G = 1.488185170234519e-34  # [AU^3*kg^-1*d^-2] -- for orbital dynamics
 # Flux conversion
 # ---------------------------------------------------------------------------
 Jy = 1e-26  # 1 Jansky [W*m^-2*Hz^-1]
+# Exact AB convention, 10**(-0.4 * 48.60) erg/s/cm^2/Hz, expressed in Jy.
+AB_ZERO_POINT_JY = 3630.7805477010028
+J2erg = 1e7  # Joules to ergs
 
 # ---------------------------------------------------------------------------
 # Length conversions
@@ -73,8 +76,8 @@ rad2arcsec = 206264.80624709636
 arcsec2rad = 4.84813681109536e-06
 mas2arcsec = 1e-3
 arcsec2mas = 1e3
-deg2rad = jnp.pi / 180.0
-rad2deg = 180.0 / jnp.pi
+deg2rad = math.pi / 180.0
+rad2deg = 180.0 / math.pi
 
 # ---------------------------------------------------------------------------
 # Time conversions
@@ -84,6 +87,7 @@ s2yr = 1.0 / yr2s
 d2s = 86400.0
 s2d = 1.157407407407407e-05
 J2000_JD = 2451545.0
+MJD_ZERO_JD = 2400000.5  # JD origin of Modified Julian Date
 
 # ---------------------------------------------------------------------------
 # Area conversions

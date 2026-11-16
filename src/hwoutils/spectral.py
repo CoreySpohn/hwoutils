@@ -6,6 +6,7 @@ normalized weights. ``Quadrature.build`` prepares concrete geometry on the host;
 its arrays and ``integrate`` method can then participate in JAX transformations.
 """
 
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from itertools import pairwise
@@ -37,6 +38,11 @@ class Band:
     def center_nm(self) -> float:
         """Arithmetic band center [nm]."""
         return self.lo_nm + self.width_nm / 2
+
+    @property
+    def geometric_center_nm(self) -> float:
+        """Geometric band center sqrt(lo_nm * hi_nm) [nm]."""
+        return math.sqrt(self.lo_nm * self.hi_nm)
 
     @property
     def width_nm(self) -> float:
