@@ -7,7 +7,7 @@ its arrays and ``integrate`` method can then participate in JAX transformations.
 """
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from itertools import pairwise
 from operator import index
 
@@ -15,6 +15,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from numpy.polynomial.legendre import leggauss
+
+from hwoutils.conversions import wavenumber_cm_to_nm
 
 
 @dataclass(frozen=True)
@@ -248,3 +250,53 @@ class Quadrature:
         object.__setattr__(result, "nodes_nm", arrays[0])
         object.__setattr__(result, "weights_nm", arrays[1])
         return result
+
+
+def spectral_knots(*models) -> np.ndarray:
+    """Collect declared spectral breakpoints [nm] from models, on the host.
+
+    A model declares breakpoints through ``quadrature_knots_nm`` (an array, or
+    a method returning one), a tabulated ``wavelengths_nm``, or a wavenumber
+    grid ``nu_grid`` [cm^-1]. Dataclass fields (Equinox modules are
+    dataclasses) and tuples of them are searched recursively, so a system or an
+    optical path contributes the tables of every component. Pass the result to
+    ``Quadrature.build`` so that no Gauss-Legendre interval spans a kink of a
+    tabulated spectrum. Call before tracing: the tables must be concrete.
+
+    Returns:
+        Sorted unique finite knots, shape ``(K,)``.
+    """
+    knots, seen = [], set()
+
+    def visit(model):
+        if model is None or id(model) in seen:
+            return
+        seen.add(id(model))
+        if isinstance(model, (tuple, list)):
+            for item in model:
+                visit(item)
+            return
+        declared = getattr(model, "quadrature_knots_nm", None)
+        if callable(declared):
+            declared = declared()
+        if declared is not None:
+            knots.append(np.asarray(declared, dtype=float).ravel())
+        wavelengths = getattr(model, "wavelengths_nm", None)
+        if wavelengths is not None:
+            knots.append(np.asarray(wavelengths, dtype=float).ravel())
+        wavenumbers = getattr(model, "nu_grid", None)
+        if wavenumbers is not None:
+            converted = wavenumber_cm_to_nm(np.asarray(wavenumbers, dtype=float))
+            knots.append(np.asarray(converted, dtype=float).ravel())
+        if is_dataclass(model) and not isinstance(model, type):
+            for field in fields(model):
+                child = getattr(model, field.name, None)
+                if is_dataclass(child) or isinstance(child, (tuple, list)):
+                    visit(child)
+
+    for model in models:
+        visit(model)
+    if not knots:
+        return np.zeros(0)
+    values = np.concatenate(knots)
+    return np.unique(values[np.isfinite(values)])

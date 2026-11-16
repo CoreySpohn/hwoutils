@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from hwoutils.spectral import Band, Quadrature, bin_mean, integrate
+from hwoutils.spectral import Band, Quadrature, bin_mean, integrate, spectral_knots
 
 reference_bin_mean = None
 reference_spec = find_spec("skyscapes")
@@ -181,3 +181,51 @@ def test_weighted_point_bins_tracing_and_capacity_errors():
         jax.jit(lambda c: bin_mean(lambda x: x, c, widths, knots_nm=knots))(centers)
     with pytest.raises(ValueError, match="widths"):
         bin_mean(lambda x: x, np.array([1.0]), np.array([-1.0]))
+
+
+def test_spectral_knots_collects_nested_declarations_and_makes_kinks_exact():
+    """Fails if a declaration form or a nested component is missed.
+
+    Basis: exact algebra. A piecewise-linear spectrum with a kink at 537 nm is
+    integrated exactly (to 64 float64 eps) by a two-node rule split at its
+    knots; the unsplit rule over the same band misses the kink by far more.
+    """
+    from dataclasses import dataclass
+
+    @dataclass
+    class Table:
+        wavelengths_nm: np.ndarray
+
+    @dataclass
+    class Hardware:
+        def quadrature_knots_nm(self):
+            return np.array([600.0])
+
+    @dataclass
+    class Molecule:
+        nu_grid: np.ndarray
+
+    @dataclass
+    class System:
+        star: Table
+        parts: tuple
+
+    system = System(
+        star=Table(np.array([500.0, 537.0, 580.0])),
+        parts=(Hardware(), Molecule(np.array([1e7 / 520.0])), None),
+    )
+    knots = spectral_knots(system, None, (np.nan,))
+    np.testing.assert_allclose(knots, [500.0, 520.0, 537.0, 580.0, 600.0], rtol=1e-12)
+
+    def spectrum(x):
+        return np.interp(x, [500.0, 537.0, 580.0], [1.0, 3.0, 2.0])
+
+    exact = 0.5 * (1.0 + 3.0) * 37.0 + 0.5 * (3.0 + 2.0) * 43.0
+    with jax.enable_x64(True):
+        for knots_nm, close in ((knots, True), (None, False)):
+            q = Quadrature.build((Band(500.0, 580.0),), knots_nm, 2)
+            value = float(q.integrate(spectrum(np.asarray(q.nodes_nm)))[0])
+            if close:
+                assert abs(value - exact) <= 64 * np.finfo(float).eps * exact
+            else:
+                assert abs(value - exact) > 1e-3 * exact
