@@ -8,7 +8,7 @@ its arrays and ``integrate`` method can then participate in JAX transformations.
 
 import math
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from itertools import pairwise
 from operator import index
 
@@ -18,6 +18,18 @@ import numpy as np
 from numpy.polynomial.legendre import leggauss
 
 from hwoutils.conversions import wavenumber_cm_to_nm
+from hwoutils.grids import Image
+
+__all__ = [
+    "Band",
+    "Quadrature",
+    "Transmission",
+    "bin_mean",
+    "integrate",
+    "rebin_bands",
+    "spectral_knots",
+    "trapezoid_weights",
+]
 
 
 @dataclass(frozen=True)
@@ -62,6 +74,45 @@ class Band:
             raise ValueError("spacing must be 'linear' or 'log'")
         edges[0], edges[-1] = self.lo_nm, self.hi_nm
         return tuple(Band(lo, hi) for lo, hi in pairwise(edges))
+
+
+def _overlap_fractions(src_lo, src_hi, dst_lo, dst_hi):
+    """Fraction of each source interval inside each destination interval.
+
+    All bounds are 1D arrays in a common unit, with nonnegative source widths.
+    The result has shape (n_dst, n_src); disjoint or empty intervals give zero.
+    """
+    src_lo, src_hi, dst_lo, dst_hi = map(jnp.asarray, (src_lo, src_hi, dst_lo, dst_hi))
+    lo = jnp.maximum(dst_lo[:, None], src_lo[None])
+    hi = jnp.minimum(dst_hi[:, None], src_hi[None])
+    widths = src_hi - src_lo
+    return jnp.maximum(hi - lo, 0) / jnp.where(widths > 0, widths, 1)[None]
+
+
+def rebin_bands(values, src_bands, dst_bands, axis=0):
+    """Rebin band integrals using exact Band overlaps, preserving units.
+
+    Assumes constant spectral density within each source Band. Full destination
+    coverage preserves the total integral to floating-point precision. An Image
+    retains its spatial grid, measure, quantity and reconstruction; axis must
+    name a leading (non-spatial) dimension in that case.
+    """
+    image = values if isinstance(values, Image) else None
+    data = image.data if image is not None else jnp.asarray(values)
+    axis = axis % data.ndim
+    if image is not None and axis >= data.ndim - 2:
+        raise ValueError("spectral axis must be a leading Image axis")
+    if data.shape[axis] != len(src_bands):
+        raise ValueError("source bands must match the spectral axis")
+    src_lo = jnp.asarray([b.lo_nm for b in src_bands])
+    src_hi = jnp.asarray([b.hi_nm for b in src_bands])
+    dst_lo = jnp.asarray([b.lo_nm for b in dst_bands])
+    dst_hi = jnp.asarray([b.hi_nm for b in dst_bands])
+    frac = _overlap_fractions(src_lo, src_hi, dst_lo, dst_hi)
+    out = jnp.moveaxis(
+        jnp.tensordot(frac, jnp.moveaxis(data, axis, 0), axes=1), 0, axis
+    )
+    return replace(image, data=out) if image is not None else out
 
 
 def trapezoid_weights(x):

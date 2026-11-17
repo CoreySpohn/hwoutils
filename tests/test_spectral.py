@@ -7,7 +7,17 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from hwoutils.spectral import Band, Quadrature, bin_mean, integrate, spectral_knots
+from hwoutils.grids import Image, PixelGrid
+from hwoutils.spectral import (
+    Band,
+    Quadrature,
+    _overlap_fractions,
+    bin_mean,
+    integrate,
+    rebin_bands,
+    spectral_knots,
+)
+from hwoutils.transforms import rebin_flux
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -185,3 +195,96 @@ def test_spectral_knots_collects_nested_declarations_and_makes_kinks_exact():
                 assert abs(value - exact) <= 64 * np.finfo(float).eps * exact
             else:
                 assert abs(value - exact) > 1e-3 * exact
+
+
+def test_rebin_conserves_total_flux():
+    """Fails if overlap weights lose flux; float64 floor of 8 eps on exact tiling."""
+    src_edges = Band(600.0, 700.0).channels(24, "log")
+    dst_edges = Band(600.0, 700.0).channels(8, "log")
+    q = Quadrature.build(src_edges, None, 3)
+    values = q.integrate(q.nodes_nm**2)
+    exact = (700.0**3 - 600.0**3) / 3
+    assert jnp.allclose(values.sum(), exact, rtol=2e-15, atol=0)
+    out = rebin_bands(values, src_edges, dst_edges)
+    assert out.shape == (8,)
+    assert jnp.allclose(out.sum(), values.sum(), rtol=2e-15, atol=0)
+
+
+def test_rebin_nested_grid_equals_reshape_sum():
+    """On an exactly nested grid the overlap rebin reduces to reshape-sum."""
+    edges = Band(600.0, 700.0).channels(8, "log")
+    n = len(edges)
+    edges_hi = tuple(sub for band in edges for sub in band.channels(4, "log"))
+    vals = (jnp.arange(n * 4, dtype=float) + 1.0) ** 1.3
+    out = rebin_bands(vals, edges_hi, edges)
+    assert jnp.allclose(out, vals.reshape(n, 4).sum(axis=1), rtol=1e-10)
+
+
+def test_rebin_along_cube_axis():
+    """Rebinning applies along the chosen axis of a (n_wav, ny, nx) cube."""
+    src_edges = Band(600.0, 700.0).channels(12, "log")
+    dst_edges = Band(600.0, 700.0).channels(4, "log")
+    cube = jax.random.uniform(jax.random.PRNGKey(0), (12, 3, 2))
+    out = rebin_bands(cube, src_edges, dst_edges, axis=0)
+    assert out.shape == (4, 3, 2)
+    assert jnp.allclose(out.sum(axis=0), cube.sum(axis=0), rtol=2e-15, atol=0)
+
+
+def test_rebin_partial_overlap_takes_fraction():
+    """A destination bin covering half a source bin takes half its flux."""
+    out = rebin_bands(jnp.array([2.0]), (Band(1.0, 2.0),), (Band(1.0, 1.5),))
+    assert jnp.allclose(out, jnp.array([1.0]))
+
+
+def test_overlap_fractions_irregular_intervals():
+    """Fails if widths or empty cells are mishandled; exact binary fractions.
+
+    Low-precision pixel edges can repeat; these zero-width cells carry no flux.
+    A centered unit target pixel under uniform unit density contains one unit.
+    """
+    fractions = _overlap_fractions(
+        jnp.array([0.0, 2.0, 6.0]),
+        jnp.array([2.0, 6.0, 6.0]),
+        jnp.array([-1.0, 1.0, 6.0]),
+        jnp.array([1.0, 4.0, 8.0]),
+    )
+    np.testing.assert_array_equal(
+        fractions, [[0.5, 0.0, 0.0], [0.5, 0.5, 0.0], [0.0, 0.0, 0.0]]
+    )
+    for dtype, width in ((jnp.float16, 4096), (jnp.bfloat16, 512)):
+        out = rebin_flux(jnp.ones((1, width), dtype=dtype), 1.0, 1.0, (1, 1))
+        np.testing.assert_array_equal(out, [[1.0]])
+
+
+def test_rebin_image_metadata_and_axes():
+    """Fails if rebin changes metadata or spatial axes; exact sums of integers."""
+    src = (Band(1.0, 2.0), Band(2.0, 3.0))
+    dst = (Band(1.0, 3.0),)
+    data = jnp.arange(24.0).reshape(3, 2, 2, 2)
+    image = Image(
+        data,
+        PixelGrid.pupil(2),
+        leading_axes=("sample", "band"),
+        measure="per_pixel",
+        quantity="photon",
+        reconstruction="nearest",
+        outside="reflect",
+    )
+    out = rebin_bands(image, src, dst, axis=-3)
+    np.testing.assert_array_equal(out.data, np.asarray(data).sum(axis=1, keepdims=True))
+    assert out.grid == image.grid
+    assert out.leading_axes == image.leading_axes
+    assert (out.measure, out.quantity, out.reconstruction, out.outside) == (
+        image.measure,
+        image.quantity,
+        image.reconstruction,
+        image.outside,
+    )
+    np.testing.assert_array_equal(
+        rebin_bands(data, src, dst, axis=1),
+        out.data,
+    )
+    with pytest.raises(ValueError, match="leading Image axis"):
+        rebin_bands(image, src, dst, axis=-1)
+    with pytest.raises(ValueError, match="source bands"):
+        rebin_bands(data, src, dst, axis=0)

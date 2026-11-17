@@ -12,6 +12,7 @@ from jax import lax
 
 from hwoutils.fft import fft_shear_setup, fft_shear_x, fft_shear_y
 from hwoutils.map_coordinates import map_coordinates
+from hwoutils.spectral import _overlap_fractions
 
 
 def ccw_rotation_matrix(rotation_deg: float) -> jax.Array:
@@ -155,9 +156,13 @@ def rebin_flux(
     def overlaps(n_src, n_tgt):
         source_edges = jnp.arange(n_src + 1, dtype=dtype) - n_src / 2
         target_edges = (jnp.arange(n_tgt + 1, dtype=dtype) - n_tgt / 2) * scale
-        left = jnp.maximum(target_edges[:-1, None], source_edges[None, :-1])
-        right = jnp.minimum(target_edges[1:, None], source_edges[None, 1:])
-        return jnp.maximum(right - left, 0)
+        source_widths = jnp.diff(source_edges)
+        return (
+            _overlap_fractions(
+                source_edges[:-1], source_edges[1:], target_edges[:-1], target_edges[1:]
+            )
+            * source_widths[None]
+        )
 
     wy = overlaps(f_src.shape[0], shape_tgt[0])
     wx = overlaps(f_src.shape[1], shape_tgt[1])
