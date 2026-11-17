@@ -1,0 +1,7 @@
+- id: no-internal-refs
+  name: no internal research references
+  description: Reject private research-workspace references in public repository text.
+  entry: src/hwoutils/internal_refs.py
+  language: script
+  types: [text]
+  exclude: ^CHANGELOG\.md$

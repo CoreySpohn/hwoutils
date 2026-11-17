@@ -3,10 +3,10 @@ repos:
     hooks:
       - id: no-internal-refs
         name: no internal research references
-        entry: python -m hwoutils.internal_refs
-        language: system
+        entry: src/hwoutils/internal_refs.py
+        language: script
         types: [text]
-        exclude: ^(CHANGELOG\.md|tools/check_internal_refs\.py)$
+        exclude: ^CHANGELOG\.md$
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: "v6.0.0"
     hooks:

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Scan public repository text for private workspace references.
 
 Run ``python -m hwoutils.internal_refs [FILE ...]`` or load this module through
