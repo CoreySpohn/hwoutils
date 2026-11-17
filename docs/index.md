@@ -30,6 +30,7 @@ pip install hwoutils
 jax_configuration
 interpolation
 testbudget
+internal_refs
 ```
 
 ## API Reference

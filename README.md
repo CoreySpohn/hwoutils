@@ -65,4 +65,7 @@ budgets. Add `pytest_plugins = ["hwoutils.testbudget.plugin"]` to the top-level
 
 ## Documentation
 
+For the shared repository text guard and pytest plugin, see the
+[internal reference guard guide](docs/internal_refs.md).
+
 Full documentation is available at [hwoutils.readthedocs.io](https://hwoutils.readthedocs.io).

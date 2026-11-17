@@ -5,10 +5,12 @@ import os
 
 from hypothesis import settings
 
-# Released hwoutils versions may not include the optional budget plugin yet.
+# Released hwoutils versions may not include the optional plugins yet.
 pytest_plugins = []
 if importlib.util.find_spec("hwoutils.testbudget") is not None:
     pytest_plugins.append("hwoutils.testbudget.plugin")
+if importlib.util.find_spec("hwoutils.internal_refs") is not None:
+    pytest_plugins.append("hwoutils.internal_refs")
 
 settings.register_profile("quick", max_examples=25, deadline=None)
 settings.register_profile("nightly", max_examples=200, deadline=None)
