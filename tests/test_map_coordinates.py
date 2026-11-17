@@ -157,6 +157,19 @@ class TestBoundaryModes:
         )
         expected = jnp.array([-74.0, -72.0])
         assert jnp.allclose(res_jax, expected)
+        # A NaN fill marks the exterior only: edge pixel centres keep their
+        # stored values, as in scipy, while points outside stay NaN.
+        n_y, n_x = self.f_src.shape
+        edges = map_coordinates(
+            self.f_src,
+            (jnp.array([0.0, n_y - 1.0, n_y - 0.5]), jnp.array([0.0, n_x - 1.0, 0.0])),
+            order=1,
+            mode="constant",
+            cval=jnp.nan,
+        )
+        assert edges[0] == self.f_src[0, 0]
+        assert edges[1] == self.f_src[-1, -1]
+        assert jnp.isnan(edges[2])
 
     def test_nearest_mode(self):
         """'nearest' mode extends edge pixels."""

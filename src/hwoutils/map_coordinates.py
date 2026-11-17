@@ -178,13 +178,17 @@ def _map_coordinates(
             weights.append(weight)
             validities.append(valid)
 
+        weight = _nonempty_prod(weights)
         if all(v is True for v in validities):
             contribution = input_arr[tuple(indices)]
         else:
             all_valid = _nonempty_prod(validities) if validities else True
-            contribution = jnp.where(all_valid, input_arr[tuple(indices)], cval)
+            # An exterior neighbour with zero weight adds nothing, so a NaN or
+            # infinite cval cannot reach a sample at an edge pixel centre.
+            fill = jnp.where(weight == 0, jnp.zeros_like(cval), cval)
+            contribution = jnp.where(all_valid, input_arr[tuple(indices)], fill)
 
-        outputs.append(_nonempty_prod(weights) * contribution)
+        outputs.append(weight * contribution)
 
     result = _nonempty_sum(outputs)
     if jnp.issubdtype(input_arr.dtype, jnp.integer):
