@@ -35,6 +35,11 @@ G = 1.488185170234519e-34  # [AU^3*kg^-1*d^-2] -- for orbital dynamics
 Jy = 1e-26  # 1 Jansky [W*m^-2*Hz^-1]
 # Exact AB convention, 10**(-0.4 * 48.60) erg/s/cm^2/Hz, expressed in Jy.
 AB_ZERO_POINT_JY = 3630.7805477010028
+# Johnson V zero-magnitude flux density in the Vega-based system.
+# Bessell, Castelli & Plez (1998), A&A 333, 231, Table A2:
+# f_nu = 3.636e-20 erg/s/cm^2/Hz at effective wavelength 0.545 um.
+# https://articles.adsabs.harvard.edu/pdf/1998A%26A...333..231B
+JOHNSON_V_VEGA_ZERO_POINT_JY = 3636.0
 J2erg = 1e7  # Joules to ergs
 
 # ---------------------------------------------------------------------------

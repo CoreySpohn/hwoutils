@@ -60,6 +60,10 @@ def test_frame_conversion_and_native_geometry(frame):
         Frame(550, 7.2, "unknown")
     with pytest.raises(ValueError, match="positive"):
         Frame(550, 0, "inscribed")
+    assert frame.coordinate_model == "paraxial_entrance_tilt"
+    assert frame == Frame(550, 7.2, "circumscribed", "paraxial_entrance_tilt")
+    with pytest.raises(ValueError, match="coordinate_model"):
+        replace(frame, coordinate_model="tangent")
 
 
 def test_sky_orientation_parity_anchor_and_roundtrip():

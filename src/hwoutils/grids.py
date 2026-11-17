@@ -30,11 +30,16 @@ class Frame:
 
     The convention labels which physical diameter is supplied; no conversion
     between inscribed and circumscribed diameters is inferred.
+    coordinate_model='paraxial_entrance_tilt' (the only supported model)
+    identifies small entrance-pupil angular tilts, theta = s * lambda / D
+    in radians for a coordinate s in lambda/D. No tangent or sine projection
+    is applied. The default retains this linear angular conversion.
     """
 
     reference_wavelength_nm: float
     diameter_m: float
     diameter_convention: str
+    coordinate_model: str = "paraxial_entrance_tilt"
 
     def __post_init__(self):
         """Store finite positive host floats and validate the diameter label."""
@@ -45,6 +50,8 @@ class Frame:
             object.__setattr__(self, name, value)
         if self.diameter_convention not in ("circumscribed", "inscribed"):
             raise ValueError("diameter_convention must be circumscribed or inscribed")
+        if self.coordinate_model not in ("paraxial_entrance_tilt",):
+            raise ValueError("coordinate_model must be 'paraxial_entrance_tilt'")
 
     def lod_to_arcsec(self, wavelength_nm):
         """Size of one lambda/D in arcsec; wavelength_nm may be traced."""
@@ -319,7 +326,11 @@ class Image(GridArray):
     """Image values with static measure, reconstruction, outside, and unit label.
 
     measure='per_pixel' means integrated pixel flux; 'per_unit_area' means
-    density in the grid unit squared. quantity labels the stored data unit.
+    density in the grid unit squared. 'point_density' explicitly declares
+    density samples at pixel centers, never cell integrals or cell means.
+    Both density measures resample by evaluating the chosen reconstruction
+    at target centers, without area scaling or footprint averaging.
+    quantity labels the stored data unit.
     reconstruction declares how samples define a continuous density: nearest,
     linear (default), Keys cubic, or band_limited. For band_limited per-pixel
     data, data / pixel_area are density samples, not deconvolved box averages.
@@ -335,8 +346,10 @@ class Image(GridArray):
     def __post_init__(self):
         """Validate array geometry and the interpretation of image values."""
         super().__post_init__()
-        if self.measure not in ("per_pixel", "per_unit_area"):
-            raise ValueError("measure must be 'per_pixel' or 'per_unit_area'")
+        if self.measure not in ("per_pixel", "per_unit_area", "point_density"):
+            raise ValueError(
+                "measure must be 'per_pixel', 'per_unit_area', or 'point_density'"
+            )
         _validate_reconstruction(self.reconstruction)
         if self.outside not in ("zero", "reflect"):
             raise ValueError("outside must be 'zero' or 'reflect'")
@@ -421,8 +434,8 @@ def resample(
     reconstruction overrides the image's declared reconstruction for this
     operation only. nearest, linear, and cubic use the existing kernels.
     reconstruction and pad_factor must be static when supplied under jit.
-    Per-unit-area values sample the source reconstruction at target pixel
-    centers, extending source indices according to image.outside: zero or
+    Per-unit-area and point-density values sample the source reconstruction
+    at target pixel centers, extending indices according to image.outside: zero or
     half-sample reflection, d[-1-n]=d[n] and d[N+n]=d[N-1-n], periodically.
 
     For these three kernels with outside='zero', per-pixel flux uses two forms,
@@ -474,7 +487,7 @@ def resample(
     Integral_a^b exp(2*pi*i*k*u/P) du = ell*exp(2*pi*i*k*m/P)*sinc(k*ell/P).
     Thus B_jn=sum_k (ell/w)*sinc(k*ell/P)*exp(2*pi*i*k*(m-n)/P)/P.
     For reflection use the full box: ell=w, m=t, and the cosine modes above.
-    For per_unit_area return A_y @ data @ A_x.T at target centers.
+    For per_unit_area and point_density return A_y @ data @ A_x.T at target centers.
     For per_pixel, density samples are data / source_pixel_area; integrating
     yields target_pixel_area/source_pixel_area * B_y @ data @ B_x.T.
     Real inputs use the cosine Nyquist convention separately on each even

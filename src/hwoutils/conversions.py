@@ -75,6 +75,22 @@ def flux_jy_to_mag(flux_jy):
     return -2.5 * jnp.log10(flux_jy / AB_ZERO_POINT_JY)
 
 
+def contrast_to_delta_mag(contrast):
+    """Convert a flux ratio F / F_ref to m - m_ref (same photometric band).
+
+    Zero gives +inf and negative ratios give NaN, without clipping. Callers
+    requiring a finite floor must apply it explicitly. JAX loads on first call.
+    """
+    import jax.numpy as jnp
+
+    return -2.5 * jnp.log10(contrast)
+
+
+def delta_mag_to_contrast(delta_mag):
+    """Convert m - m_ref to the flux ratio F / F_ref in the same band."""
+    return 10.0 ** (-0.4 * delta_mag)
+
+
 def mag_per_arcsec2_to_jy_per_arcsec2(mag_per_arcsec2):
     """Convert surface brightness from mag/arcsec^2 to Jy/arcsec^2 (AB).
 
@@ -211,6 +227,20 @@ def mas_to_arcsec(angle_mas):
 def arcsec_to_mas(angle_arcsec):
     """Convert arcseconds to milliarcseconds."""
     return angle_arcsec * const.arcsec2mas
+
+
+def angular_diameter_arcsec(radius_m, distance_pc):
+    """Small-angle diameter 2 R / d in arcsec, for radius [m], distance [pc].
+
+    Inputs broadcast through ordinary arithmetic; radius may be zero and
+    distance must be positive. No finite-distance arcsine correction is used.
+    """
+    return rad_to_arcsec(2.0 * radius_m / (distance_pc * const.pc2m))
+
+
+def angular_diameter_mas(radius_m, distance_pc):
+    """Small-angle diameter 2 R / d in mas, for radius [m], distance [pc]."""
+    return arcsec_to_mas(angular_diameter_arcsec(radius_m, distance_pc))
 
 
 def arcsec_to_lambda_d(angle_arcsec, wavelength_nm, diameter_m):

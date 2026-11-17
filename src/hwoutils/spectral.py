@@ -64,6 +64,140 @@ class Band:
         return tuple(Band(lo, hi) for lo, hi in pairwise(edges))
 
 
+def trapezoid_weights(x):
+    """Integration weights along the last axis of an increasing grid x.
+
+    ``sum(weights * y, axis=-1)`` is the composite trapezoid integral, with
+    half-width endpoint cells and centered interior widths. Leading axes
+    are independent grids. A singleton has zero weight (zero integration
+    span); an empty axis raises. Concrete inputs must be finite and strictly
+    increasing; under JAX tracing the caller must maintain these conditions.
+    """
+    x = jnp.asarray(x)
+    x = x.astype(jnp.result_type(x, 1.0))
+    if x.ndim < 1 or x.shape[-1] == 0:
+        raise ValueError("x must have a nonempty last axis")
+    if not isinstance(x, jax.core.Tracer):
+        values = np.asarray(x)
+        if not np.all(np.isfinite(values)) or np.any(np.diff(values, axis=-1) <= 0):
+            raise ValueError("x must be finite and strictly increasing")
+    half = jnp.diff(x, axis=-1) / 2
+    zero = jnp.zeros_like(x[..., :1])
+    return jnp.concatenate((half, zero), axis=-1) + jnp.concatenate(
+        (zero, half), axis=-1
+    )
+
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True, eq=False)
+class Transmission:
+    """Tabulated dimensionless response, linear in wavelength, zero outside.
+
+    Construct with concrete, matching 1D arrays of at least two samples:
+    positive strictly increasing ``wavelength_nm`` and finite nonnegative
+    ``transmission``. Values above one and identically zero responses are
+    allowed (relative responses and opaque elements). Values at endpoints
+    retain the tabulated response, with no extrapolated wings.
+
+    The arrays are dynamic PyTree leaves for jit, vmap and parameter gradients.
+    Transformed tables must preserve the construction constraints. A photon
+    spectrum multiplied by this response integrates detected photons; no
+    energy-to-photon weighting or normalization is implicit.
+    """
+
+    wavelength_nm: jax.Array
+    transmission: jax.Array
+
+    def __post_init__(self):
+        """Validate concrete tables and store arrays at configured precision."""
+        wave = np.asarray(jnp.asarray(self.wavelength_nm, dtype=float))
+        response = np.asarray(jnp.asarray(self.transmission, dtype=float))
+        if wave.ndim != 1 or wave.size < 2 or response.shape != wave.shape:
+            raise ValueError("tables must share shape (N,) with N >= 2")
+        if (
+            not np.all(np.isfinite(wave))
+            or np.any(wave <= 0)
+            or np.any(np.diff(wave) <= 0)
+        ):
+            raise ValueError("wavelength_nm must be finite, positive and increasing")
+        if not np.all(np.isfinite(response)) or np.any(response < 0):
+            raise ValueError("transmission must be finite and nonnegative")
+        object.__setattr__(self, "wavelength_nm", jnp.asarray(wave, dtype=float))
+        object.__setattr__(self, "transmission", jnp.asarray(response, dtype=float))
+
+    @classmethod
+    def tophat(cls, center_nm: float, width_nm: float) -> "Transmission":
+        """Unit response over a positive full width [nm] about center_nm."""
+        return cls([center_nm - width_nm / 2, center_nm + width_nm / 2], [1.0, 1.0])
+
+    def __call__(self, wavelength_nm):
+        """Evaluate at scalar or array wavelengths [nm], with zero extrapolation."""
+        return jnp.interp(
+            wavelength_nm, self.wavelength_nm, self.transmission, left=0.0, right=0.0
+        )
+
+    @property
+    def quadrature_knots_nm(self):
+        """All breakpoints [nm], including support endpoints for zero extension."""
+        return self.wavelength_nm
+
+    @property
+    def low_nm(self):
+        """Lower edge of the tabulated support [nm]."""
+        return self.wavelength_nm[0]
+
+    @property
+    def high_nm(self):
+        """Upper edge of the tabulated support [nm]."""
+        return self.wavelength_nm[-1]
+
+    @property
+    def mean_nm(self):
+        """Response-weighted mean wavelength [nm], NaN for an opaque table.
+
+        Exact linear-segment area and quadratic first moment; this is the
+        detected mean for a flat incident photon flux density.
+        """
+        a, b = self.wavelength_nm[:-1], self.wavelength_nm[1:]
+        ta, tb = self.transmission[:-1], self.transmission[1:]
+        area = jnp.sum((b - a) * (ta + tb) / 2)
+        moment = jnp.sum((b - a) * ((2 * a + b) * ta + (a + 2 * b) * tb) / 6)
+        return moment / area
+
+    def integrate(self, band: Band, fn=None, *, n_nodes: int = 4, knots_nm=None):
+        """Integrate response * fn over a Band, in fn units times nm.
+
+        fn defaults to one, giving equivalent width [nm]. Scalar-wavelength
+        fn may return any fixed shape. Splits at all table knots and optional
+        additional fn breakpoints. Order one integrates the response exactly;
+        order two integrates its product with a linear spectrum exactly.
+        Band and n_nodes are static under jit; tables may be traced.
+        """
+        knots = self.wavelength_nm
+        if knots_nm is not None:
+            knots = jnp.sort(jnp.concatenate((knots, jnp.asarray(knots_nm))))
+        return integrate(
+            self if fn is None else lambda w: self(w) * fn(w),
+            jnp.array([band.center_nm]),
+            jnp.array([band.width_nm]),
+            n_nodes=n_nodes,
+            knots_nm=knots,
+            max_knots=knots.size + 1,
+        )[0]
+
+    def tree_flatten(self):
+        """Expose both table arrays as dynamic leaves."""
+        return (self.wavelength_nm, self.transmission), None
+
+    @classmethod
+    def tree_unflatten(cls, metadata, arrays):
+        """Rebuild transformed tables without host validation."""
+        result = object.__new__(cls)
+        object.__setattr__(result, "wavelength_nm", arrays[0])
+        object.__setattr__(result, "transmission", arrays[1])
+        return result
+
+
 def bin_mean(
     fn: Callable,
     centers_nm: jax.Array,
