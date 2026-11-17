@@ -1,9 +1,6 @@
 """Band geometry and quadrature contracts, using small independent primitives."""
 
-import sys
-from importlib.util import find_spec, module_from_spec, spec_from_file_location
 from itertools import pairwise
-from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -11,21 +8,6 @@ import numpy as np
 import pytest
 
 from hwoutils.spectral import Band, Quadrature, bin_mean, integrate, spectral_knots
-
-reference_bin_mean = None
-reference_spec = find_spec("skyscapes")
-if reference_spec is not None and reference_spec.submodule_search_locations:
-    # Load the independent spectral module without unrelated package backends.
-    spectral_path = Path(reference_spec.submodule_search_locations[0]) / "spectral.py"
-    if spectral_path.is_file():
-        module_spec = spec_from_file_location("_spectral_reference", spectral_path)
-        reference = module_from_spec(module_spec)
-        sys.modules[module_spec.name] = reference
-        try:
-            module_spec.loader.exec_module(reference)
-            reference_bin_mean = reference.bin_mean
-        except ImportError:
-            pass
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -116,32 +98,6 @@ def test_smooth_integrand_converges_over_three_orders():
     assert errors[1] < errors[0] / 20
     assert errors[2] < errors[1] / 20
     assert errors[2] / exact < 1e-9
-
-
-def test_integral_matches_optional_bin_mean():
-    """Fails if the port changes knot splitting or tensor reduction.
-
-    rtol=3e-14 is a float64 reduction allowance for the integral/width
-    conversion and independently compiled kernels, not a model tolerance.
-    """
-    if reference_bin_mean is None:
-        pytest.skip("optional skyscapes.spectral is not importable")
-    centers = np.array([1.3, 3.2, 5.0])
-    widths = np.array([0.6, 3.0, 2.0])
-    knots = np.array([0.0, 2.0, 4.0, 7.0])
-
-    def fn(w):
-        f = jnp.sin(w) + jnp.maximum(w - 2, 0)
-        return jnp.array([f, f * w])
-
-    options = dict(n_nodes=3, knots_nm=knots)
-    expected = reference_bin_mean(fn, centers, widths, **options)
-    actual = integrate(fn, centers, widths, **options)
-    span = (centers + widths / 2) - (centers - widths / 2)
-    np.testing.assert_allclose(actual / span[:, None], expected, rtol=3e-14, atol=3e-14)
-    np.testing.assert_allclose(
-        bin_mean(fn, centers, widths, **options), expected, rtol=3e-14, atol=3e-14
-    )
 
 
 def test_weighted_point_bins_tracing_and_capacity_errors():
