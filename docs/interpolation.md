@@ -48,46 +48,6 @@ Use this operation when a smooth reconstructed image is needed, such as
 aperture-boundary oversampling. Check convergence of the aperture measurement;
 conserving a global sum alone does not establish correct local photometry.
 
-## Measures and conservative integration
-
-An `Image` has a numerator unit and a spatial measure. For example, photon
-radiance on an arcsec grid has quantity `"ph s^-1 m^-2 nm^-1"` and measure
-`Measure.density("sr")`. Its `integrated()` method multiplies the center
-sample by the cell's solid angle in steradians. A density with denominator
-`"grid"` instead uses the squared coordinate unit. To use steradians with a
-lambda/D grid, convert the grid through its frame at the relevant wavelength.
-Carry cell integrals through the coordinate change, then call `density("sr")`
-on the resulting arcsec image. Transmission and contrast use
-`Measure.intensive()` and retain their values under center sampling.
-
-Use explicit source and target geometry to integrate a PSF. Here `psf` is a
-100 by 100 array of photon rates integrated over source pixels.
-
-```python notest
-from hwoutils.grids import (
-    Image,
-    Measure,
-    PixelGrid,
-    footprint_overlap,
-    integrate_footprints,
-)
-
-source = PixelGrid.regular(psf.shape, 1.0, "arcsec")
-target = PixelGrid.regular((40, 40), 2.5, "arcsec")
-image = Image(psf, source, (), Measure.integral(), "ph/s")
-overlap = footprint_overlap(source, target)
-rebinned = integrate_footprints(image, overlap)
-```
-
-Each target cell receives the fraction of every source integral covered by
-its footprint. Density samples use the midpoint rule within their cells.
-The field is zero beyond the source. A target that tiles the source conserves
-the total flux to floating-point precision. Rotation, shear, different
-centers, and leading array dimensions are supported. Construct overlap
-weights once on the host and reuse them with traced image values. To
-collect several grids, pass a sequence of target grids. The result has a
-final cell axis in grid order, with each grid flattened in row-major order.
-
 ## Fourier rotation
 
 `rotate_image(image, rotation_deg, pad_factor=0.5, center=None)` rotates

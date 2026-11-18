@@ -1,4 +1,8 @@
-"""hwoutils -- Shared JAX-based utilities for the HWO simulation suite."""
+"""hwoutils -- Shared utilities for the HWO simulation suite.
+
+Constants, conversions and ``Epoch`` need only NumPy. The JAX modules need
+the ``hwoutils[jax]`` extra and import JAX themselves.
+"""
 
 from importlib import import_module as _import_module
 
@@ -7,25 +11,18 @@ try:
 except ModuleNotFoundError:
     __version__ = "unknown"
 
-_GRID_EXPORTS = ("CellOverlap", "Measure", "footprint_overlap", "integrate_footprints")
-
 __all__ = [
-    *_GRID_EXPORTS,
     "__version__",
     "enable_x64",
-    "radial_profile",
     "set_host_device_count",
     "set_platform",
 ]
 
 
 def __getattr__(name):
-    """Load JAX-backed exports only when requested."""
+    """Load the JAX configuration helpers only when requested."""
     if name in __all__ and name != "__version__":
-        module = "radial" if name == "radial_profile" else "jax_config"
-        if name in _GRID_EXPORTS:
-            module = "grids"
-        value = getattr(_import_module(f"hwoutils.{module}"), name)
+        value = getattr(_import_module("hwoutils.jax_config"), name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

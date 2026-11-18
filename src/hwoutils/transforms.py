@@ -80,7 +80,7 @@ def resample_flux(
 
     This is a center-sampling approximation to integrated target-pixel flux,
     not a conservative pixel integrator or an antialiasing filter. Use
-    ``hwoutils.grids.integrate_footprints`` for conservative pixel integration.
+    ``optixstuff.grids.integrate_footprints`` for conservative pixel integration.
 
     Approximate photometry requires a source smooth on both grids and
     negligible at the zero-padded source boundaries. A Gaussian truncated

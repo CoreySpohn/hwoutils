@@ -3,7 +3,6 @@
 import math
 import subprocess
 import sys
-from dataclasses import replace
 
 import jax
 import jax.numpy as jnp
@@ -17,8 +16,8 @@ from hwoutils import conversions as conv
 
 
 def test_lightweight_imports_and_modified_julian_dates():
-    """Fails if imports load JAX or the MJD sign/origin changes; exact algebra."""
-    for module in ("constants", "conversions"):
+    """Fails if core modules load JAX or the MJD origin changes; exact algebra."""
+    for module in ("constants", "conversions", "epoch", "radial"):
         code = f"import sys; import hwoutils.{module}; assert 'jax' not in sys.modules"
         subprocess.run([sys.executable, "-c", code], check=True)
     assert const.MJD_ZERO_JD == 2400000.5
@@ -197,30 +196,9 @@ def test_planck_inverse_and_energy_wavenumber_units():
         )
 
 
-def test_geometric_grids_bands_and_radial_centers():
-    """Fails for tolerant flip centers or arithmetic log centers.
-
-    Center and squared-distance algebra is exact; one ULP displacement must
-    fail geometric symmetry. Log edges/centers allow 2e-15 float64 rounding.
-    """
-    from hwoutils.grids import PixelGrid
+def test_radial_center_is_the_geometric_array_center():
+    """Fails if the optical-axis center is not (n - 1) / 2; exact arithmetic."""
     from hwoutils.radial import get_center
-    from hwoutils.spectral import Band
 
     for shape in ((3, 6), (4, 5), (1, 1)):
-        cy, cx = ((shape[0] - 1) / 2, (shape[1] - 1) / 2)
-        assert get_center(shape) == (cy, cx)
-        grid = PixelGrid.regular(shape, 0.1, "arcsec")
-        assert grid.is_geometric
-        assert not replace(grid, center_x=np.nextafter(cx, math.inf)).is_geometric
-        assert not replace(grid, center_y=np.nextafter(cy, math.inf)).is_geometric
-    band = Band(400.0, 1600.0)
-    assert band.geometric_center_nm == 800.0
-    channels = band.channels(3, "log")
-    edges = [channels[0].lo_nm, *(channel.hi_nm for channel in channels)]
-    np.testing.assert_allclose(edges, 400 * 4 ** (np.arange(4) / 3), rtol=2e-15)
-    np.testing.assert_allclose(
-        [b.geometric_center_nm for b in channels],
-        400 * 4 ** ((np.arange(3) + 0.5) / 3),
-        rtol=2e-15,
-    )
+        assert get_center(shape) == ((shape[0] - 1) / 2, (shape[1] - 1) / 2)

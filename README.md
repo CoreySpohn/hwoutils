@@ -11,7 +11,7 @@
 
 # hwoutils
 
-**hwoutils** is the shared utility foundation for the HWO direct imaging simulation suite. It provides JAX-native physical constants, unit conversions, and flux-conserving image transforms used across:
+**hwoutils** is the shared utility foundation for the HWO direct imaging simulation suite. It provides physical constants, unit conversions and a reference epoch that need only NumPy, plus flux-conserving JAX image transforms behind the `jax` extra. It is used across:
 
 - **[yippy](https://github.com/CoreySpohn/yippy)** — Coronagraph performance modeling
 - **[orbix](https://github.com/CoreySpohn/orbix)** — Orbital dynamics and target scheduling
@@ -22,16 +22,17 @@
 ## Key Features
 
 - **Physical Constants** — Single source of truth for SI constants, conversion factors, and astronomical quantities
-- **Unit Conversions** — Pure JAX conversion functions (angular, flux, distance, time) with zero astropy overhead
+- **Unit Conversions** — Conversion functions (angular, flux, distance, time) with zero astropy overhead; NumPy arrays and JAX arrays both work
 - **Image Transforms** — Flux-conserving resampling, sub-pixel shifts, and cubic spline interpolation
-- **JAX-Native** — All operations are JIT-compilable, differentiable, and GPU-accelerated
+- **JAX Extra** — The image transforms are JIT-compilable, differentiable, and GPU-accelerated (`pip install "hwoutils[jax]"`)
 
 ## Installation
 
 With [uv](https://docs.astral.sh/uv/) (recommended):
 
 ```bash
-uv pip install hwoutils
+uv pip install hwoutils          # NumPy only
+uv pip install "hwoutils[jax]"   # with the JAX modules
 ```
 
 Or with pip:

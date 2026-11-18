@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hwoutils"
-description = "Shared JAX-based utilities for the HWO direct imaging simulation suite — constants, conversions, and image transforms."
+description = "Shared utilities for the HWO direct imaging simulation suite: constants, conversions, epochs, and JAX image transforms."
 authors = [{ name = "Corey Spohn", email = "corey.a.spohn@nasa.gov" }]
 dynamic = ['readme', 'version']
 requires-python = ">=3.12"
@@ -16,8 +16,9 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Topic :: Scientific/Engineering :: Astronomy",
 ]
-dependencies = ["equinox", "jax>=0.8.1", "jaxlib>=0.8.1", "numpy>=2.0"]
+dependencies = ["numpy>=2.0"]
 [project.optional-dependencies]
+jax = ["jax>=0.8.1", "jaxlib>=0.8.1"]
 dev = ["pre-commit"]
 docs = [
   "sphinx",
@@ -29,6 +30,7 @@ docs = [
   "matplotlib",
 ]
 test = [
+  "hwoutils[jax]",
   "pytest>=7.3.2",
   "hypothesis>=6.79.1",
   "psutil>=5.9.4",
@@ -71,7 +73,7 @@ select = ["B", "D", "E", "F", "I", "UP", "RUF", "NPY"]
 convention = "google"
 
 [dependency-groups]
-dev = ["astropy", "hypothesis"]
+dev = ["astropy", "hypothesis", "hwoutils[jax]"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hwoutils"]
