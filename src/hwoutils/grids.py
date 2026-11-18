@@ -141,7 +141,7 @@ class PixelGrid:
             if not math.isfinite(value):
                 raise ValueError("centers must be finite")
             object.__setattr__(self, name, value)
-        if self.unit not in ("pupil_diameter", "meter", "lod", "arcsec"):
+        if self.unit not in ("pupil_diameter", "meter", "lod", "arcsec", "pixel", "au"):
             raise ValueError("unknown grid unit")
         if self.unit == "lod" and self.frame is None:
             raise ValueError("a lod grid requires a frame")
@@ -210,6 +210,33 @@ class PixelGrid:
         )
         return self.pixel_to_unit(columns, rows)
 
+    def corners(self) -> np.ndarray:
+        """Return the four outer (x, y) corners, starting at pixel (-0.5, -0.5).
+
+        The corners follow increasing column index first, then increasing row
+        index. Like the grid metadata, the result uses host precision.
+        """
+        ny, nx = self.shape
+        pixels = np.array(
+            [(-0.5, -0.5), (nx - 0.5, -0.5), (nx - 0.5, ny - 0.5), (-0.5, ny - 0.5)]
+        )
+        return (pixels - (self.center_x, self.center_y)) @ np.asarray(self.basis).T
+
+    def extent(self) -> tuple[float, float, float, float]:
+        """Return outer edges (x0, x1, y0, y1) in increasing pixel-index order.
+
+        Reflected axes have descending edges. Resample rotated or sheared
+        grids before drawing with imshow.
+        """
+        if self.basis[0][1] != 0 or self.basis[1][0] != 0:
+            raise ValueError("resample a rotated or sheared grid before display")
+        first, _, last, _ = self.corners()
+        return float(first[0]), float(last[0]), float(first[1]), float(last[1])
+
+    def radius(self) -> jax.Array:
+        """Distance from the optical axis at each pixel center, in grid units."""
+        return jnp.hypot(*self.coordinates())
+
     def pixel_to_unit(self, x, y):
         """Map named pixel-center coordinates (x, y) to offsets in unit."""
         dx, dy = jnp.asarray(x) - self.center_x, jnp.asarray(y) - self.center_y
@@ -271,6 +298,25 @@ class PixelGrid:
             basis,
             "arcsec",
             self.frame,
+            self.orientation,
+        )
+
+    def to_lod(self, wavelength_nm, frame: Frame) -> "PixelGrid":
+        """Convert an arcsec grid to static lambda/D geometry in the given frame."""
+        if self.unit != "arcsec":
+            raise ValueError("to_lod requires an arcsec grid")
+        wavelength_nm = float(wavelength_nm)
+        if not math.isfinite(wavelength_nm) or wavelength_nm <= 0:
+            raise ValueError("wavelength_nm must be positive and finite")
+        scale = frame.lod_to_arcsec(wavelength_nm)
+        basis = tuple(tuple(value / scale for value in row) for row in self.basis)
+        return PixelGrid(
+            self.shape,
+            self.center_x,
+            self.center_y,
+            basis,
+            "lod",
+            frame,
             self.orientation,
         )
 

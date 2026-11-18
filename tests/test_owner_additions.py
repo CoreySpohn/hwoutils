@@ -198,13 +198,13 @@ def test_planck_inverse_and_energy_wavenumber_units():
 
 
 def test_geometric_grids_bands_and_radial_centers():
-    """Fails for swapped axes, tolerant flip centers or arithmetic log centers.
+    """Fails for tolerant flip centers or arithmetic log centers.
 
     Center and squared-distance algebra is exact; one ULP displacement must
     fail geometric symmetry. Log edges/centers allow 2e-15 float64 rounding.
     """
     from hwoutils.grids import PixelGrid
-    from hwoutils.radial import get_center, radial_distance
+    from hwoutils.radial import get_center
     from hwoutils.spectral import Band
 
     for shape in ((3, 6), (4, 5), (1, 1)):
@@ -214,14 +214,6 @@ def test_geometric_grids_bands_and_radial_centers():
         assert grid.is_geometric
         assert not replace(grid, center_x=np.nextafter(cx, math.inf)).is_geometric
         assert not replace(grid, center_y=np.nextafter(cy, math.inf)).is_geometric
-        rows, cols = np.indices(shape)
-        for center in (None, (0.25, 1.5)):
-            y, x = (cy, cx) if center is None else center
-            np.testing.assert_allclose(
-                radial_distance(shape, center=center),
-                np.sqrt((rows - y) ** 2 + (cols - x) ** 2),
-                rtol=2e-7,
-            )
     band = Band(400.0, 1600.0)
     assert band.geometric_center_nm == 800.0
     channels = band.channels(3, "log")

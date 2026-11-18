@@ -1,11 +1,13 @@
-"""Radial utilities for image analysis.
+"""Radial statistics for images with explicit pixel geometry."""
 
-Functions for computing radial distance grids and extracting radial profiles
-from 2D images. All functions are JIT-compilable and differentiable.
-"""
+from operator import index
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
+
+if TYPE_CHECKING:
+    from hwoutils.grids import Image
 
 
 def get_center(shape: tuple[int, int]) -> tuple[float, float]:
@@ -13,75 +15,69 @@ def get_center(shape: tuple[int, int]) -> tuple[float, float]:
     return ((shape[0] - 1) / 2.0, (shape[1] - 1) / 2.0)
 
 
-def radial_distance(
-    shape: tuple[int, int],
-    center: tuple[float, float] | None = None,
-) -> jax.Array:
-    """Calculate radial distance from center for each pixel.
-
-    Args:
-        shape: Image shape (ny, nx).
-        center: Center coordinates (cy, cx). If None, uses geometric center
-            ``((ny-1)/2, (nx-1)/2)``.
-
-    Returns:
-        2D array of radial distances in pixels.
-    """
-    ny, nx = shape
-    if center is None:
-        center = get_center(shape)
-    cy, cx = center
-
-    y, x = jnp.ogrid[:ny, :nx]
-    return jnp.sqrt((y - cy) ** 2 + (x - cx) ** 2)
-
-
-@jax.jit(static_argnames=["nbins"])
+@jax.jit(static_argnames=("stat", "nbins"))
 def radial_profile(
-    image: jax.Array,
-    pixel_scale_arcsec: float = 1.0,
-    center: tuple[float, float] | None = None,
+    image: "Image",
+    *,
+    stat: str = "mean",
+    edges: jax.typing.ArrayLike | None = None,
     nbins: int | None = None,
-) -> tuple[jax.Array, jax.Array]:
-    """Compute the radial profile of a 2D image.
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Return radial bin centers, statistics, and pixel counts for a 2D image.
 
-    Bins pixels by their distance from center and computes the mean value
-    in each radial bin.
+    Distances and bin centers are in the image's grid units, measured from
+    its optical axis. Supply strictly increasing edges in those units, or
+    use equally spaced edges from zero to the farthest sample center.
+    Explicit edges take precedence over nbins. By default there are
+    max(1, max(grid.shape) // 2) bins.
 
-    Args:
-        image: 2D input image.
-        pixel_scale_arcsec: Conversion factor from pixels to physical units
-            (e.g. lambda/D per pixel). Default 1.0 gives bins in pixels.
-        center: Center coordinates (cy, cx). If None, uses geometric center.
-        nbins: Number of radial bins. If None, uses ``floor(max_dim / 2)``.
-
-    Returns:
-        ``(separations, profile)`` where separations are bin centers in
-        physical units and profile is the mean value in each bin.
+    Bins include their left edge, and the last bin also includes its right
+    edge. Pixels outside the edge range are excluded. Empty bins return NaN.
+    The statistic (mean, median, or max) propagates NaNs within a bin.
+    Under JIT, stat and nbins must be static.
     """
-    ny, nx = image.shape
-    if nbins is None:
-        nbins = int(max(ny, nx) // 2)
+    if stat not in ("mean", "median", "max"):
+        raise ValueError(f"unknown stat: {stat!r}; use 'mean', 'median', or 'max'")
+    if image.data.ndim != 2 or jnp.iscomplexobj(image.data):
+        raise ValueError("radial_profile requires a real 2D Image")
+    radius = image.grid.radius().ravel()
+    if edges is None:
+        nbins = max(1, max(image.grid.shape) // 2) if nbins is None else index(nbins)
+        if nbins < 1:
+            raise ValueError("nbins must be positive")
+        edges = jnp.linspace(0, radius.max(), nbins + 1)
+    else:
+        edges = jnp.asarray(edges)
+        if edges.ndim != 1 or edges.size < 2:
+            raise ValueError("edges must be one-dimensional with at least two entries")
+        nbins = edges.size - 1
+        edges = edges.astype(jnp.result_type(edges, radius))
 
-    r = radial_distance((ny, nx), center)
-    max_radius = jnp.max(r)
-
-    bin_edges = jnp.linspace(0, max_radius, nbins + 1)
-    bin_centers = (bin_edges[1:] + bin_edges[:-1]) / 2.0
-
-    r_flat = r.ravel()
-    image_flat = image.ravel()
-
-    # Assign each pixel to a bin (1-indexed; 0 = below first edge)
-    inds = jnp.digitize(r_flat, bin_edges)
-    # Clamp overflow into last bin
-    inds = jnp.clip(inds, 1, nbins)
-
-    # Compute mean per bin using scatter
-    bin_sums = jnp.zeros(nbins).at[inds - 1].add(image_flat)
-    bin_counts = jnp.zeros(nbins).at[inds - 1].add(1.0)
-
-    profile = jnp.where(bin_counts > 0, bin_sums / bin_counts, 0.0)
-    separations = bin_centers * pixel_scale_arcsec
-
-    return separations, profile
+    centers = edges[:-1] + (edges[1:] - edges[:-1]) / 2
+    bins = jnp.searchsorted(edges[1:-1], radius, side="right")
+    inside = (radius >= edges[0]) & (radius <= edges[-1])
+    bins = jnp.where(inside, bins, nbins)
+    counts = jnp.zeros(nbins, dtype=bins.dtype).at[bins].add(1, mode="drop")
+    data = jnp.asarray(
+        image.data.ravel(), dtype=jnp.result_type(image.data, jnp.float32)
+    )
+    if stat == "mean":
+        totals = jnp.zeros(nbins, dtype=data.dtype).at[bins].add(data, mode="drop")
+        values = totals / jnp.maximum(counts, 1)
+    elif stat == "max":
+        values = (
+            jnp.full(nbins, -jnp.inf, dtype=data.dtype).at[bins].max(data, mode="drop")
+        )
+    else:
+        # Sort by bin, then by value. The two middle positions also give the
+        # odd-count median, where both positions select the same sample.
+        sorted_data = data[jnp.lexsort((data, bins))]
+        start = jnp.where(counts > 0, jnp.cumsum(counts) - counts, 0)
+        lo = sorted_data[start + (jnp.maximum(counts, 1) - 1) // 2]
+        hi = sorted_data[start + counts // 2]
+        values = jnp.where(counts % 2 == 1, lo, lo / 2 + hi / 2)
+        has_nan = (
+            jnp.zeros(nbins, dtype=bool).at[bins].max(jnp.isnan(data), mode="drop")
+        )
+        values = jnp.where(has_nan, jnp.nan, values)
+    return centers, jnp.where(counts > 0, values, jnp.nan), counts

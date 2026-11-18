@@ -41,6 +41,50 @@ def test_worked_pixel_and_corner_count(frame):
     assert pupil.unit == "pupil_diameter"
 
 
+@pytest.mark.parametrize(
+    ("shape", "center", "basis", "extent"),
+    [
+        ((4, 4), (1.5, 1.5), ((1, 0), (0, 1)), (-2, 2, -2, 2)),
+        ((3, 5), (2, 1), ((2, 0), (0, 1)), (-5, 5, -1.5, 1.5)),
+        ((3, 4), (0.25, 2), ((2, 0), (0, -1)), (-1.5, 6.5, 2.5, -0.5)),
+    ],
+)
+def test_raster_corner_and_extent(shape, center, basis, extent):
+    """Fails if raster edges drop a half pixel, axis length, center or sign."""
+    grid = PixelGrid(shape, *center, basis, "arcsec")
+    x0, x1, y0, y1 = extent
+    assert grid.extent() == extent
+    np.testing.assert_array_equal(
+        grid.corners(), [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    )
+
+
+@pytest.mark.parametrize(
+    ("basis", "corners", "x", "y"),
+    [
+        (
+            ((2, 1), (0, 3)),
+            [(-5.5, -1.5), (0.5, -1.5), (2.5, 4.5), (-3.5, 4.5)],
+            [[-4, -2, 0], [-3, -1, 1]],
+            [[0, 0, 0], [3, 3, 3]],
+        ),
+        (
+            ((0, -1), (2, 0)),
+            [(0.5, -5), (0.5, 1), (-1.5, 1), (-1.5, -5)],
+            [[0, 0, 0], [-1, -1, -1]],
+            [[-4, -2, 0], [-4, -2, 0]],
+        ),
+    ],
+)
+def test_affine_grid_corners_and_radius(basis, corners, x, y):
+    """Fails if an axis is swapped or shear or rotation is silently lost."""
+    grid = PixelGrid((2, 3), 2, 0, basis, "arcsec")
+    with pytest.raises(ValueError, match="rotated or sheared"):
+        grid.extent()
+    np.testing.assert_array_equal(grid.corners(), corners)
+    np.testing.assert_allclose(grid.radius(), np.hypot(x, y), atol=1e-15, rtol=0)
+
+
 def test_frame_conversion_and_native_geometry(frame):
     """Fails if lambda/D uses wrong wavelength units or a duplicated constant.
 
@@ -54,6 +98,18 @@ def test_frame_conversion_and_native_geometry(frame):
     angular = grid.to_arcsec(550)
     assert angular.unit == "arcsec" and angular.frame == frame
     np.testing.assert_allclose(angular.step, expected * 0.25, rtol=3e-15, atol=0)
+    offaxis = PixelGrid(
+        (3, 4),
+        0.25,
+        1.5,
+        ((0.25, 0.125), (0, 0.5)),
+        "lod",
+        frame,
+        SkyOrientation(12, -1),
+    )
+    restored = offaxis.to_arcsec(600).to_lod(600, frame)
+    assert replace(restored, basis=offaxis.basis) == offaxis
+    np.testing.assert_allclose(restored.basis, offaxis.basis, atol=0, rtol=3e-15)
     assert grid.is_native(550) and not grid.is_native(600)
     assert not angular.is_native(550)
     with pytest.raises(ValueError, match="convention"):
