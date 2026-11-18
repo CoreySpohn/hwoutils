@@ -10,7 +10,7 @@ from jax.test_util import check_grads
 
 from hwoutils import constants as const
 from hwoutils import conversions as conv
-from hwoutils.grids import Image, PixelGrid, resample
+from hwoutils.grids import Image, Measure, PixelGrid, resample
 from hwoutils.random_fields import StationaryGaussianField, radial_frequency
 from hwoutils.spectral import Band, Transmission, spectral_breaks, trapezoid_weights
 
@@ -22,7 +22,7 @@ def precision():
     jax.clear_caches()
 
 
-def test_point_density_evaluates_centers_without_area_or_box_factors():
+def test_density_evaluates_centers_without_area_or_box_factors():
     """Fails if point samples are deposited, box-averaged or area-scaled.
 
     Local linear/Keys kernels reproduce an interior affine density exactly;
@@ -33,7 +33,7 @@ def test_point_density_evaluates_centers_without_area_or_box_factors():
     """
     source = PixelGrid.regular((8, 8), 0.5, "arcsec")
     x, y = source.coordinates()
-    image = Image(3 + 2 * x - y, source, (), "point_density", "ph/s/arcsec^2")
+    image = Image(3 + 2 * x - y, source, (), Measure.density("grid"), "ph/s")
     for step in (0.25, 0.75):
         target = PixelGrid.regular((2, 3), step, "arcsec")
         tx, ty = target.coordinates()
@@ -49,7 +49,7 @@ def test_point_density_evaluates_centers_without_area_or_box_factors():
             )
             result = resample(image, target, reconstruction=kernel)
             np.testing.assert_allclose(result.data, expected, rtol=0, atol=2e-13)
-            assert result.measure == "point_density"
+            assert result.measure == Measure.density("grid")
         sy, sx = np.indices(source.shape)
         for outside in ("zero", "reflect"):
             if outside == "zero":

@@ -4,7 +4,7 @@ import jax
 import numpy as np
 import pytest
 
-from hwoutils.grids import Image, PixelGrid
+from hwoutils.grids import Image, Measure, PixelGrid
 from hwoutils.radial import radial_profile
 
 
@@ -17,7 +17,11 @@ def test_centered_mean_matches_previous_profile():
     with jax.enable_x64():
         data = np.random.default_rng(0).normal(size=(8, 8))
         image = Image(
-            data, PixelGrid.regular(data.shape, 0.25, "arcsec"), (), "per_pixel", "test"
+            data,
+            PixelGrid.regular(data.shape, 0.25, "arcsec"),
+            (),
+            Measure.integral(),
+            "test",
         )
         centers, means, counts = radial_profile(image)
     np.testing.assert_allclose(
@@ -59,7 +63,7 @@ def test_displaced_image_custom_bins(stat, expected):
     # (x,y)=(0,0), (1,0), (-1,0), (0,1); the last has three members.
     data = [[4, 3, 10, 9], [99, 20, 2, -1]]
     grid = PixelGrid.regular((2, 4), 1, "pixel", center=(2, 0))
-    image = Image(data, grid, (), "per_pixel", "test")
+    image = Image(data, grid, (), Measure.integral(), "test")
     edges = np.array([0.0, 1.25, 1.375, 2.0])
     centers, values, counts = jax.jit(
         lambda im, e: radial_profile(im, stat=stat, edges=e)
@@ -72,7 +76,7 @@ def test_displaced_image_custom_bins(stat, expected):
 def test_edges_exclude_samples_outside_both_ends():
     """Fails if underflow or overflow is folded into the first or last bin."""
     grid = PixelGrid.regular((1, 5), 1, "pixel", center=(0, 0))
-    image = Image([[8, 4, 2, 16, 32]], grid, (), "per_pixel", "test")
+    image = Image([[8, 4, 2, 16, 32]], grid, (), Measure.integral(), "test")
     _, values, counts = radial_profile(image, edges=[1, 2, 3], nbins=10)
     np.testing.assert_array_equal(values, [4, 9])
     np.testing.assert_array_equal(counts, [1, 2])

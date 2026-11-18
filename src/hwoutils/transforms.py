@@ -1,6 +1,6 @@
 """Image transformation utilities.
 
-Area-scaled interpolation, conservative pixel rebinning, and Fourier rotation.
+Area-scaled interpolation and Fourier rotation.
 JAX derivatives describe the chosen reconstruction and its piecewise boundaries.
 """
 
@@ -12,7 +12,6 @@ from jax import lax
 
 from hwoutils.fft import fft_shear_setup, fft_shear_x, fft_shear_y
 from hwoutils.map_coordinates import map_coordinates
-from hwoutils.spectral import _overlap_fractions
 
 
 def ccw_rotation_matrix(rotation_deg: float) -> jax.Array:
@@ -81,7 +80,7 @@ def resample_flux(
 
     This is a center-sampling approximation to integrated target-pixel flux,
     not a conservative pixel integrator or an antialiasing filter. Use
-    ``rebin_flux`` for conservative, axis-aligned pixel overlap integration.
+    ``hwoutils.grids.integrate_footprints`` for conservative pixel integration.
 
     Approximate photometry requires a source smooth on both grids and
     negligible at the zero-padded source boundaries. A Gaussian truncated
@@ -121,53 +120,6 @@ def resample_flux(
     # Promote integer pixel fluxes before interpolation, avoiding output rounding.
     source = jnp.asarray(f_src, dtype=jnp.result_type(f_src, 1.0))
     return map_coordinates(source, coords, order=order) * scale**2
-
-
-@functools.partial(jax.jit, static_argnames=["shape_tgt"])
-def rebin_flux(
-    f_src: jax.Array,
-    pixscale_src: float,
-    pixscale_tgt: float,
-    shape_tgt: tuple[int, int],
-) -> jax.Array:
-    """Integrate overlaps between centered, axis-aligned square pixel grids.
-
-    Each source pixel is modeled as uniform surface brightness over its area.
-    Flux is conserved to floating-point precision when the target footprint
-    contains the source footprint. Partial coverage loses only the uncovered
-    flux. This model preserves positivity but does not recover sub-pixel PSF
-    structure or provide an ideal frequency-domain antialiasing filter.
-
-    Args:
-        f_src: 2D integrated source-pixel flux, real or complex.
-        pixscale_src: Positive source pixel scale.
-        pixscale_tgt: Positive target pixel scale in the same units.
-        shape_tgt: Positive target dimensions (ny, nx).
-
-    Returns:
-        Integrated flux per target pixel. The geometric centers coincide.
-        Derivatives with respect to scales are piecewise defined at pixel edges.
-    """
-    if f_src.ndim != 2 or len(shape_tgt) != 2 or min(*f_src.shape, *shape_tgt) <= 0:
-        raise ValueError("rebin_flux requires nonempty 2D grids")
-    scale = pixscale_tgt / pixscale_src
-    dtype = jnp.result_type(f_src.real.dtype, pixscale_src, pixscale_tgt, 1.0)
-
-    def overlaps(n_src, n_tgt):
-        source_edges = jnp.arange(n_src + 1, dtype=dtype) - n_src / 2
-        target_edges = (jnp.arange(n_tgt + 1, dtype=dtype) - n_tgt / 2) * scale
-        source_widths = jnp.diff(source_edges)
-        return (
-            _overlap_fractions(
-                source_edges[:-1], source_edges[1:], target_edges[:-1], target_edges[1:]
-            )
-            * source_widths[None]
-        )
-
-    wy = overlaps(f_src.shape[0], shape_tgt[0])
-    wx = overlaps(f_src.shape[1], shape_tgt[1])
-    source = jnp.asarray(f_src, dtype=jnp.result_type(f_src, 1.0))
-    return wy @ source @ wx.T
 
 
 def _decompose_angle(angle: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -281,69 +233,3 @@ def rotate_image(
     rot_deg, n_rot = _decompose_angle(-jnp.asarray(rotation_deg))
     image = _rot90_traceable(image, n_rot)
     return _rotate_with_shear(image, rot_deg, pad_factor, translation)
-
-
-# ---------------------------------------------------------------------------
-# PSF Downsampling
-# ---------------------------------------------------------------------------
-
-
-def downsample_psf(
-    psf: jax.Array,
-    src_pixscale: float,
-    target_shape: tuple[int, int],
-) -> tuple[jax.Array, float]:
-    """Integrate a PSF onto a coarser grid with the same field of view.
-
-    Aligned integer reductions sum blocks exactly. Other ratios integrate a
-    piecewise-constant source-pixel model via ``rebin_flux``.
-
-    Args:
-        psf: The source PSF image (2D array).
-        src_pixscale: The pixel scale of the source PSF (in lambda/D or
-            other consistent units).
-        target_shape: The target shape (ny_tgt, nx_tgt).
-
-    Returns:
-        Tuple of (resampled_psf, new_pixscale).
-    """
-    if psf.ndim != 2 or len(target_shape) != 2 or min(*psf.shape, *target_shape) <= 0:
-        raise ValueError("downsample_psf requires nonempty 2D grids")
-    ny, nx = psf.shape
-    ty, tx = target_shape
-    if ny * tx != nx * ty:
-        raise ValueError("target_shape must preserve the source aspect ratio")
-    if ty > ny or tx > nx:
-        raise ValueError("target_shape must not exceed the source shape")
-    tgt_pixscale = src_pixscale * (ny / ty)
-    if ny % ty == 0 and nx % tx == 0:
-        # Aligned detector bins integrate by summation, with no reconstruction.
-        source = jnp.asarray(psf, dtype=jnp.result_type(psf, 1.0))
-        resampled = source.reshape(ty, ny // ty, tx, nx // tx).sum(axis=(1, 3))
-    else:
-        resampled = rebin_flux(psf, src_pixscale, tgt_pixscale, target_shape)
-    return resampled, tgt_pixscale
-
-
-def downsample_psfs(
-    psfs: jax.Array,
-    src_pixscale: float,
-    target_shape: tuple[int, int],
-) -> tuple[jax.Array, float]:
-    """Downsample a stack of PSFs to target shape while conserving total flux.
-
-    Args:
-        psfs: Stack of PSF images with shape (N, H, W).
-        src_pixscale: The pixel scale of the source PSFs.
-        target_shape: The target shape (ny_tgt, nx_tgt) for each PSF.
-
-    Returns:
-        Tuple of (resampled_psfs, new_pixscale).
-    """
-    if psfs.ndim != 3:
-        raise ValueError("downsample_psfs requires a stack with shape (N, H, W)")
-    resampled, scales = jax.vmap(
-        lambda psf: downsample_psf(psf, src_pixscale, target_shape),
-        out_axes=(0, None),
-    )(psfs)
-    return resampled, scales

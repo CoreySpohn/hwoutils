@@ -9,7 +9,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from hwoutils.grids import Image, PixelGrid
+from hwoutils.grids import Image, Measure, PixelGrid
 from hwoutils.spectral import (
     Band,
     Quadrature,
@@ -19,7 +19,6 @@ from hwoutils.spectral import (
     rebin_bands,
     spectral_breaks,
 )
-from hwoutils.transforms import rebin_flux
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -230,8 +229,7 @@ def test_rebin_partial_overlap_takes_fraction():
 def test_overlap_fractions_irregular_intervals():
     """Fails if widths or empty cells are mishandled; exact binary fractions.
 
-    Low-precision pixel edges can repeat; these zero-width cells carry no flux.
-    A centered unit target pixel under uniform unit density contains one unit.
+    Zero-width source intervals carry no flux.
     """
     fractions = _overlap_fractions(
         jnp.array([0.0, 2.0, 6.0]),
@@ -242,9 +240,6 @@ def test_overlap_fractions_irregular_intervals():
     np.testing.assert_array_equal(
         fractions, [[0.5, 0.0, 0.0], [0.5, 0.5, 0.0], [0.0, 0.0, 0.0]]
     )
-    for dtype, width in ((jnp.float16, 4096), (jnp.bfloat16, 512)):
-        out = rebin_flux(jnp.ones((1, width), dtype=dtype), 1.0, 1.0, (1, 1))
-        np.testing.assert_array_equal(out, [[1.0]])
 
 
 def test_rebin_image_metadata_and_axes():
@@ -256,7 +251,7 @@ def test_rebin_image_metadata_and_axes():
         data,
         PixelGrid.pupil(2),
         leading_axes=("sample", "band"),
-        measure="per_pixel",
+        measure=Measure.integral(),
         quantity="photon",
         reconstruction="nearest",
         outside="reflect",

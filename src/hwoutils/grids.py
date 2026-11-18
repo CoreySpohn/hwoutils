@@ -6,7 +6,9 @@ u = B (p - c). No array or device value is stored in a PixelGrid.
 """
 
 import math
-from dataclasses import dataclass, fields
+import re
+from collections.abc import Sequence
+from dataclasses import dataclass, field, fields
 from operator import index
 from typing import NamedTuple
 
@@ -14,6 +16,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from hwoutils.constants import arcsec2rad
 from hwoutils.conversions import lambda_d_to_arcsec
 from hwoutils.map_coordinates import map_coordinates
 from hwoutils.radial import get_center
@@ -277,6 +280,16 @@ class PixelGrid:
         (a, b), (c, d) = self.basis
         return abs(a * d - b * c)
 
+    def cell_area(self, area: str) -> float:
+        """Return cell area in grid units squared or, for an arcsec grid, sr."""
+        if area == "grid":
+            return self.pixel_area
+        if area != "sr":
+            raise ValueError("area must be 'grid' or 'sr'")
+        if self.unit != "arcsec":
+            raise ValueError("steradian cell area requires an arcsec grid")
+        return self.pixel_area * arcsec2rad**2
+
     def to_arcsec(self, wavelength_nm) -> "PixelGrid":
         """Convert a lod grid at a concrete wavelength to static arcsec geometry.
 
@@ -361,30 +374,53 @@ class GridArray:
     def tree_unflatten(cls, metadata, arrays):
         """Rebuild transformed containers without converting JAX placeholders."""
         result = object.__new__(cls)
-        for field, value in zip(fields(cls), (arrays[0], *metadata), strict=True):
-            object.__setattr__(result, field.name, value)
+        for attribute, value in zip(fields(cls), (arrays[0], *metadata), strict=True):
+            object.__setattr__(result, attribute.name, value)
         return result
+
+
+@jax.tree_util.register_static
+@dataclass(frozen=True)
+class Measure:
+    """Spatial meaning of a value and, for a density, its area denominator."""
+
+    kind: str
+    area: str | None = None
+
+    def __post_init__(self):
+        """Require a denominator exactly when the stored values are densities."""
+        if self.kind == "density":
+            if self.area not in ("grid", "sr"):
+                raise ValueError("density area must be 'grid' or 'sr'")
+        elif self.kind not in ("integral", "intensive") or self.area is not None:
+            raise ValueError("expected an integral, density or intensive measure")
+
+    @classmethod
+    def integral(cls) -> "Measure":
+        """Value integrated over the cell."""
+        return cls("integral")
+
+    @classmethod
+    def density(cls, area: str) -> "Measure":
+        """Point sample of density per grid unit squared or per steradian."""
+        return cls("density", area)
+
+    @classmethod
+    def intensive(cls) -> "Measure":
+        """Point sample with no area denominator, such as transmission."""
+        return cls("intensive")
 
 
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True, eq=False)
 class Image(GridArray):
-    """Image values with static measure, reconstruction, outside, and unit label.
+    """Image samples with their spatial measure and numerator unit.
 
-    measure='per_pixel' means integrated pixel flux; 'per_unit_area' means
-    density in the grid unit squared. 'point_density' explicitly declares
-    density samples at pixel centers, never cell integrals or cell means.
-    Both density measures resample by evaluating the chosen reconstruction
-    at target centers, without area scaling or footprint averaging.
-    quantity labels the stored data unit.
-    reconstruction declares how samples define a continuous density: nearest,
-    linear (default), Keys cubic, or band_limited. For band_limited per-pixel
-    data, data / pixel_area are density samples, not deconvolved box averages.
-    outside declares the extension beyond the array: zero (default) or reflect
-    (even symmetry about the half-sample edges, repeated with period 2N).
+    Reconstruction specifies nearest, linear, Keys cubic, or band-limited
+    interpolation. Outside specifies zero or half-sample reflection.
     """
 
-    measure: str
+    measure: Measure
     quantity: str
     reconstruction: str = "linear"
     outside: str = "zero"
@@ -392,15 +428,58 @@ class Image(GridArray):
     def __post_init__(self):
         """Validate array geometry and the interpretation of image values."""
         super().__post_init__()
-        if self.measure not in ("per_pixel", "per_unit_area", "point_density"):
-            raise ValueError(
-                "measure must be 'per_pixel', 'per_unit_area', or 'point_density'"
-            )
+        if not isinstance(self.measure, Measure):
+            raise ValueError("measure must be a Measure")
+        if self.measure.kind == "density":
+            self.grid.cell_area(self.measure.area)
         _validate_reconstruction(self.reconstruction)
         if self.outside not in ("zero", "reflect"):
             raise ValueError("outside must be 'zero' or 'reflect'")
         if not isinstance(self.quantity, str) or not self.quantity.strip():
             raise ValueError("quantity must be a nonempty unit string")
+        if re.search(r"/\s*sr\b|\bsr\s*(?:\^|\*\*)?\{?-1\b", self.quantity):
+            raise ValueError("quantity must contain only the numerator unit")
+
+    def integrated(self) -> "Image":
+        """Convert a point density to a cell integral by the midpoint rule."""
+        area = self._integration_area()
+        if area is None:
+            return self
+        return self._with_measure(self.data * area, Measure.integral())
+
+    def _integration_area(self):
+        """Area factor for density samples, or None for existing integrals."""
+        if self.measure.kind == "intensive":
+            raise ValueError("an intensive image has no cell integral")
+        if self.measure.kind == "integral":
+            return None
+        return self.grid.cell_area(self.measure.area)
+
+    def density(self, area: str) -> "Image":
+        """Express values as density per unit area, averaging cell integrals."""
+        measure = Measure.density(area)
+        target_area = self.grid.cell_area(area)
+        if self.measure == measure:
+            return self
+        if self.measure.kind == "intensive":
+            raise ValueError("an intensive image has no area denominator")
+        if self.measure.kind == "integral":
+            values = self.data / target_area
+        else:
+            values = self.data * (self.grid.cell_area(self.measure.area) / target_area)
+        return self._with_measure(values, measure)
+
+    def _with_measure(self, data, measure):
+        # vmap can temporarily remove leading dimensions from the data.
+        metadata = (
+            self.grid,
+            self.leading_axes,
+            measure,
+            self.quantity,
+            self.reconstruction,
+            self.outside,
+        )
+        return Image.tree_unflatten(metadata, (data,))
 
 
 def _validate_reconstruction(reconstruction):
@@ -413,6 +492,12 @@ def _validate_reconstruction(reconstruction):
 
 def _pixel_map(source, target):
     """Compose the static target-to-source linear map through the sky plane."""
+    if source.unit != target.unit:
+        raise ValueError("mapping requires matching grid units")
+    if source.unit == "lod" and source.frame != target.frame:
+        raise ValueError("lod mapping requires equal frames")
+    if (source.orientation is None) != (target.orientation is None):
+        raise ValueError("mapping requires both orientations or neither")
 
     def orientation_matrix(orientation):
         angle = math.radians(orientation.pa_y_deg)
@@ -480,7 +565,7 @@ def resample(
     reconstruction overrides the image's declared reconstruction for this
     operation only. nearest, linear, and cubic use the existing kernels.
     reconstruction and pad_factor must be static when supplied under jit.
-    Per-unit-area and point-density values sample the source reconstruction
+    Density and intensive values sample the source reconstruction
     at target pixel centers, extending indices according to image.outside: zero or
     half-sample reflection, d[-1-n]=d[n] and d[N+n]=d[N-1-n], periodically.
 
@@ -496,8 +581,7 @@ def resample(
     target with the transpose of the interpolation kernel; its partition of
     unity conserves the sum to roundoff whenever the target contains every
     nonzero source pixel's stencil. Cropping loses flux in both forms.
-    Neither is a pixel-footprint integral; use ``transforms.rebin_flux``
-    for that on centered, axis-aligned grids.
+    Use ``integrate_footprints`` to integrate a piecewise-constant field.
     With outside='reflect', these kernels always sample the extended density
     and multiply by target pixel area, including when coarsening. Deposition
     of only the finite source would omit the reflected exterior. This center
@@ -533,8 +617,8 @@ def resample(
     Integral_a^b exp(2*pi*i*k*u/P) du = ell*exp(2*pi*i*k*m/P)*sinc(k*ell/P).
     Thus B_jn=sum_k (ell/w)*sinc(k*ell/P)*exp(2*pi*i*k*(m-n)/P)/P.
     For reflection use the full box: ell=w, m=t, and the cosine modes above.
-    For per_unit_area and point_density return A_y @ data @ A_x.T at target centers.
-    For per_pixel, density samples are data / source_pixel_area; integrating
+    For densities and intensive values return A_y @ data @ A_x.T at target centers.
+    For cell integrals, density samples are data / source_pixel_area; integrating
     yields target_pixel_area/source_pixel_area * B_y @ data @ B_x.T.
     Real inputs use the cosine Nyquist convention separately on each even
     axis; complex inputs retain the FFT-ordered signed Nyquist mode.
@@ -567,12 +651,6 @@ def resample(
     Coarsening either axis fails this guarantee even if pixel area decreases.
     """
     source_grid = image.grid
-    if source_grid.unit != target_grid.unit:
-        raise ValueError("resampling requires matching grid units")
-    if source_grid.unit == "lod" and source_grid.frame != target_grid.frame:
-        raise ValueError("lod resampling requires equal frames")
-    if (source_grid.orientation is None) != (target_grid.orientation is None):
-        raise ValueError("resampling requires both orientations or neither")
     selected = image.reconstruction if reconstruction is None else reconstruction
     _validate_reconstruction(selected)
     mapping = _pixel_map(source_grid, target_grid)
@@ -589,6 +667,7 @@ def resample(
         output_reconstruction,
         image.outside,
     )
+    integral = image.measure.kind == "integral"
     area_ratio = target_grid.pixel_area / source_grid.pixel_area
     data = jnp.asarray(image.data, dtype=jnp.result_type(image.data, 1.0))
     if selected == "band_limited":
@@ -619,7 +698,7 @@ def resample(
                 abs(ratio),
                 pad_factor,
                 data.real.dtype,
-                image.measure == "per_pixel",
+                integral,
                 image.outside,
             )
             # A real cosine choice on EACH axis avoids a mixed Nyquist term.
@@ -628,14 +707,12 @@ def resample(
             matrices.append(jnp.asarray(matrix, dtype=data.dtype))
         wx, wy = matrices
         data = wy @ data @ wx.T
-        if image.measure == "per_pixel":
+        if integral:
             data = data * area_ratio
         return Image.tree_unflatten(metadata, (data,))
     order = {"nearest": 0, "linear": 1, "cubic": 3}[selected]
-    deposit_flux = (
-        image.outside == "zero" and image.measure == "per_pixel" and area_ratio >= 1.0
-    )
-    scale = area_ratio if image.measure == "per_pixel" and not deposit_flux else 1.0
+    deposit_flux = image.outside == "zero" and integral and area_ratio >= 1.0
+    scale = area_ratio if integral and not deposit_flux else 1.0
     # Sampling maps target centers into source pixels; deposition maps
     # source centers into target pixels and applies the kernel's transpose.
     from_grid, to_grid = (
@@ -668,3 +745,189 @@ def resample(
         interpolate = jax.vmap(interpolate)
     data = interpolate(data) * scale
     return Image.tree_unflatten(metadata, (data,))
+
+
+def _clip(polygon, axis, bound, sign):
+    """Clip a convex polygon to sign * (coordinate - bound) >= 0."""
+    if not polygon:
+        return []
+    clipped = []
+    previous = polygon[-1]
+    prev_distance = sign * (previous[axis] - bound)
+    for current in polygon:
+        distance = sign * (current[axis] - bound)
+        if (distance >= 0) != (prev_distance >= 0):
+            fraction = prev_distance / (prev_distance - distance)
+            crossing = [
+                previous[k] + fraction * (current[k] - previous[k]) for k in (0, 1)
+            ]
+            crossing[axis] = bound
+            clipped.append(tuple(crossing))
+        if distance >= 0:
+            clipped.append(current)
+        previous, prev_distance = current, distance
+    return clipped
+
+
+def _polygon_overlaps(source, target, mapping):
+    """Yield target index, source index and fractional area in source pixels."""
+    ny, nx = source.shape
+    corners = np.array([[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]])
+    offsets = (corners - [target.center_x, target.center_y]) @ mapping.T
+    offsets += [source.center_x, source.center_y]
+    for row, col in np.ndindex(target.shape):
+        polygon = offsets + mapping @ [col, row]
+        lo_x, lo_y = np.floor(polygon.min(axis=0) + 0.5).astype(int)
+        hi_x, hi_y = np.ceil(polygon.max(axis=0) + 0.5).astype(int)
+        for y in range(max(0, lo_y), min(ny, hi_y)):
+            for x in range(max(0, lo_x), min(nx, hi_x)):
+                # Clipping in local coordinates keeps the shoelace sum accurate.
+                clipped = [tuple(p) for p in polygon - [x, y]]
+                for axis in (0, 1):
+                    clipped = _clip(clipped, axis, -0.5, 1)
+                    clipped = _clip(clipped, axis, 0.5, -1)
+                if len(clipped) >= 3:
+                    area = (
+                        abs(
+                            math.fsum(
+                                p[0] * q[1] - p[1] * q[0]
+                                for p, q in zip(
+                                    clipped, clipped[1:] + clipped[:1], strict=True
+                                )
+                            )
+                        )
+                        / 2
+                    )
+                    if area:
+                        yield row * target.shape[1] + col, y * nx + x, area
+
+
+def _axis_overlaps(n_source, n_target, source_center, target_center, step):
+    """Lengths of overlapping intervals measured in source pixels."""
+    src = np.arange(n_source)
+    edges = (np.arange(n_target + 1) - 0.5 - target_center) * step + source_center
+    left = np.minimum(edges[1:], edges[:-1])
+    right = np.maximum(edges[1:], edges[:-1])
+    return np.maximum(
+        0, np.minimum(right[:, None], src + 0.5) - np.maximum(left[:, None], src - 0.5)
+    )
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True, eq=False)
+class CellOverlap:
+    """Reusable overlap operator with static geometry and numeric weight leaves.
+
+    Construct with footprint_overlap. The matrix shape is (cells, source pixels).
+    """
+
+    source: PixelGrid = field(metadata={"static": True})
+    target: PixelGrid | None = field(metadata={"static": True})
+    shape: tuple[int, int] = field(metadata={"static": True})
+    flat_output: bool = field(metadata={"static": True})
+    # Aligned tiles use block sums. Other diagonal maps use two 1D matrices.
+    # Affine or disjoint grids use sparse (cell, source pixel, fraction) triples.
+    blocks: tuple[int, int] | None = field(metadata={"static": True}, default=None)
+    axes: tuple | None = None
+    sparse: tuple | None = None
+
+
+def footprint_overlap(
+    source: PixelGrid, cells: Sequence[PixelGrid] | PixelGrid
+) -> CellOverlap:
+    """Compute exact overlaps on the host for static grids in a common frame.
+
+    A single grid produces a gridded result. A sequence concatenates the cells
+    of its grids in row-major order. Overlapping cells collect independently.
+    """
+    flat = not isinstance(cells, PixelGrid)
+    targets = tuple(cells) if flat else (cells,)
+    shape = (sum(math.prod(t.shape) for t in targets), math.prod(source.shape))
+    target = targets[0] if len(targets) == 1 else None
+    offset = 0
+    rows, cols, fractions = [], [], []
+    for grid in targets:
+        mapping = _pixel_map(source, grid)
+        if target is not None:
+            # Compare stored bases directly. Recovering the integer ratio by
+            # division can miss exact block alignment at decimal plate scales.
+            by, bx = (n // m for n, m in zip(source.shape, grid.shape, strict=True))
+            if (
+                source.orientation == grid.orientation
+                and (by * grid.shape[0], bx * grid.shape[1]) == source.shape
+                and (grid.center_x + 0.5) * bx == source.center_x + 0.5
+                and (grid.center_y + 0.5) * by == source.center_y + 0.5
+                and np.array_equal(np.asarray(source.basis) * [bx, by], grid.basis)
+            ):
+                return CellOverlap(source, target, shape, flat, blocks=(by, bx))
+        if mapping[0, 1] == 0 and mapping[1, 0] == 0:
+            sx, sy = np.diag(mapping)
+            wx = _axis_overlaps(
+                source.shape[1], grid.shape[1], source.center_x, grid.center_x, sx
+            )
+            wy = _axis_overlaps(
+                source.shape[0], grid.shape[0], source.center_y, grid.center_y, sy
+            )
+            if target is not None:
+                return CellOverlap(source, target, shape, flat, axes=(wy, wx))
+            # Form only products of nonzero intervals for a sequence of grids.
+            ty, y = np.nonzero(wy)
+            tx, x = np.nonzero(wx)
+            rows.extend((offset + ty[:, None] * grid.shape[1] + tx).ravel())
+            cols.extend((y[:, None] * source.shape[1] + x).ravel())
+            fractions.extend((wy[ty, y, None] * wx[tx, x]).ravel())
+        else:
+            for row, col, area in _polygon_overlaps(source, grid, mapping):
+                rows.append(offset + row)
+                cols.append(col)
+                fractions.append(area)
+        offset += math.prod(grid.shape)
+    sparse = (
+        np.asarray(rows, dtype=np.int32),
+        np.asarray(cols, dtype=np.int32),
+        np.asarray(fractions, dtype=np.float64),
+    )
+    return CellOverlap(source, target, shape, flat, sparse=sparse)
+
+
+def integrate_footprints(image: Image, overlap: CellOverlap) -> Image | jax.Array:
+    """Collect integral or density samples as a piecewise-constant field.
+
+    A target pixel receives the covered fraction of each source integral.
+    Outside the source, the field is zero. Leading dimensions are preserved.
+    A sequence of grids returns a final, flat cell axis.
+    """
+    if image.grid != overlap.source:
+        raise ValueError("image grid must match the overlap source grid")
+    area = image._integration_area()
+    data = jnp.asarray(image.data, dtype=jnp.result_type(image.data, 1.0))
+    leading = data.shape[:-2]
+    if overlap.blocks is not None:
+        by, bx = overlap.blocks
+        ny, nx = overlap.target.shape
+        data = data.reshape(*leading, ny, by, nx, bx).sum(axis=(-3, -1))
+    elif overlap.axes is not None:
+        wy, wx = (jnp.asarray(w, dtype=data.dtype) for w in overlap.axes)
+        data = wy @ data @ wx.T
+    else:
+        rows, cols, fractions = overlap.sparse
+        weighted = data.reshape(*leading, overlap.shape[1])[..., cols] * jnp.asarray(
+            fractions, dtype=data.dtype
+        )
+        data = jnp.zeros((*leading, overlap.shape[0]), dtype=data.dtype)
+        data = data.at[..., rows].add(weighted)
+    if area is not None:
+        data = data * area
+    if overlap.flat_output:
+        return data.reshape(*leading, overlap.shape[0])
+    metadata = (
+        overlap.target,
+        image.leading_axes,
+        Measure.integral(),
+        image.quantity,
+        "nearest",
+        "zero",
+    )
+    return Image.tree_unflatten(
+        metadata, (data.reshape(*leading, *overlap.target.shape),)
+    )

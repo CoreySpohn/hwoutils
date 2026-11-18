@@ -7,7 +7,18 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from hwoutils.grids import Frame, GridArray, Image, PixelGrid, SkyOrientation, resample
+from hwoutils.constants import arcsec2rad
+from hwoutils.grids import (
+    Frame,
+    GridArray,
+    Image,
+    Measure,
+    PixelGrid,
+    SkyOrientation,
+    footprint_overlap,
+    integrate_footprints,
+    resample,
+)
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -170,13 +181,13 @@ def test_equal_grids_share_trace_and_arrays_transform(frame):
 
     data = jnp.arange(20.0).reshape(4, 5)
     for geometry in (grid, equal):
-        image = Image(data, geometry, (), "per_pixel", "phot/s")
+        image = Image(data, geometry, (), Measure.integral(), "phot/s")
         result = twice(image)
         np.testing.assert_array_equal(result.data, 2 * data)
         assert result.grid == geometry
     assert len(traces) == 1
     stacked = Image(
-        jnp.stack((data, 2 * data)), grid, ("wavelength",), "per_pixel", "phot/s"
+        jnp.stack((data, 2 * data)), grid, ("wavelength",), Measure.integral(), "phot/s"
     )
     mapped = jax.vmap(lambda image: jax.tree.map(lambda a: a + 1, image))(stacked)
     np.testing.assert_array_equal(mapped.data, stacked.data + 1)
@@ -194,7 +205,7 @@ def test_validation_rejects_inconsistent_shapes_and_geometry(frame):
     with pytest.raises(ValueError, match="spatial shape"):
         GridArray(jnp.zeros((4, 3)), grid, ())
     with pytest.raises(ValueError, match="leading_axes count"):
-        Image(jnp.zeros((2, 4, 4)), grid, (), "per_pixel", "phot/s")
+        Image(jnp.zeros((2, 4, 4)), grid, (), Measure.integral(), "phot/s")
     with pytest.raises(ValueError, match="measure"):
         Image(jnp.zeros((4, 4)), grid, (), "invalid", "phot/s")
     with pytest.raises(ValueError, match="requires a frame"):
@@ -207,6 +218,40 @@ def test_validation_rejects_inconsistent_shapes_and_geometry(frame):
         _ = replace(grid, basis=((1, 0), (0, 2))).step
 
 
+def test_cell_solid_angle_and_measures():
+    """Fails if radiance integrates over square arcseconds or scales twice."""
+    # One full turn is 2*pi radians, 360 degrees, or 360*3600 arcseconds.
+    radians = 2 * np.pi / (360 * 3600)
+    np.testing.assert_allclose(arcsec2rad, radians, rtol=3e-16)
+    grid = PixelGrid((2, 4), 1.5, 0.5, ((0.5, 0.25), (0, 2)), "arcsec")
+    radiance = Image(
+        jnp.full(grid.shape, 8.0), grid, (), Measure.density("sr"), "ph s^-1 m^-2 nm^-1"
+    )
+    expected = 8 * radians**2
+    flux = radiance.integrated()
+    np.testing.assert_allclose(flux.data, expected, rtol=6e-16)
+    np.testing.assert_allclose(flux.density("sr").data, 8.0, rtol=3e-16)
+    np.testing.assert_allclose(radiance.density("grid").data, expected, rtol=6e-16)
+    result = integrate_footprints(radiance, footprint_overlap(grid, grid))
+    np.testing.assert_allclose(result.data.sum(), 8 * expected, rtol=6e-16)
+    assert result.quantity == radiance.quantity
+    with pytest.raises(ValueError, match="arcsec"):
+        PixelGrid.pupil(2).cell_area("sr")
+    with pytest.raises(ValueError, match="numerator"):
+        replace(radiance, quantity="ph s^-1 m^-2 nm^-1 sr^-1")
+
+    source = PixelGrid.regular((4, 4), 1.0, "pixel")
+    target = PixelGrid.regular((2, 2), 2.0, "pixel")
+    transmission = Image(
+        jnp.full(source.shape, 0.375), source, (), Measure.intensive(), "transmission"
+    )
+    np.testing.assert_array_equal(resample(transmission, target).data, 0.375)
+    with pytest.raises(ValueError, match="intensive"):
+        transmission.integrated()
+    with pytest.raises(ValueError, match="intensive"):
+        integrate_footprints(transmission, footprint_overlap(source, target))
+
+
 def test_resample_identity_with_leading_axes():
     """Fails if identity shifts by half a pixel or loses image metadata.
 
@@ -215,7 +260,7 @@ def test_resample_identity_with_leading_axes():
     """
     grid = PixelGrid.regular((4, 5), 0.25, "arcsec")
     data = jnp.arange(40.0).reshape(2, 4, 5) / 2
-    image = Image(data, grid, ("time",), "per_pixel", "phot/s")
+    image = Image(data, grid, ("time",), Measure.integral(), "phot/s")
     for reconstruction in ("nearest", "linear", "cubic"):
         actual = jax.jit(
             lambda im, mode=reconstruction: resample(im, grid, reconstruction=mode)
@@ -238,17 +283,17 @@ def test_resample_interior_flux_on_integer_regrid():
     coarser = PixelGrid.regular((4, 4), 3, "arcsec")
     fine = PixelGrid.regular((24, 24), 0.5, "arcsec")
     data = jnp.zeros(source.shape).at[4:8, 4:8].set(jnp.arange(16.0).reshape(4, 4))
-    image = Image(data, source, (), "per_pixel", "phot/s")
+    image = Image(data, source, (), Measure.integral(), "phot/s")
     for target in (coarse, coarser, fine):
         actual = resample(image, target)
         np.testing.assert_allclose(actual.data.sum(), data.sum(), rtol=3e-15, atol=0)
     # Refinement samples a density, so a flat patch stays flat with no gaps.
-    flat = Image(jnp.ones(source.shape) * 4, source, (), "per_pixel", "phot/s")
+    flat = Image(jnp.ones(source.shape) * 4, source, (), Measure.integral(), "phot/s")
     np.testing.assert_allclose(
         resample(flat, fine).data[4:20, 4:20], 1, rtol=3e-15, atol=0
     )
     uniform = Image(
-        jnp.ones(source.shape) * 7, source, (), "per_unit_area", "Jy/arcsec2"
+        jnp.ones(source.shape) * 7, source, (), Measure.density("grid"), "Jy"
     )
     np.testing.assert_allclose(resample(uniform, coarse).data, 7, rtol=3e-15, atol=0)
 
@@ -261,10 +306,10 @@ def test_resample_half_pixel_center_shift_matches_linear_ramp():
     """
     grid = PixelGrid.regular((8, 9), 1, "arcsec")
     x, y = grid.coordinates()
-    image = Image(10 + 2 * x - 3 * y, grid, (), "per_unit_area", "Jy/arcsec2")
+    image = Image(10 + 2 * x - 3 * y, grid, (), Measure.density("grid"), "Jy")
     shifted = replace(grid, center_x=grid.center_x + 0.5, center_y=grid.center_y - 0.5)
     tx, ty = shifted.coordinates()
-    for measure in ("per_pixel", "per_unit_area"):
+    for measure in (Measure.integral(), Measure.density("grid")):
         actual = resample(replace(image, measure=measure), shifted)
         np.testing.assert_allclose(
             actual.data[1:-1, 1:-1],
@@ -293,7 +338,7 @@ def test_resample_composes_anisotropic_rotation_and_orientation():
     coords = source.coordinates()
     sky = source.orientation.detector_to_sky(*coords)
     image = Image(
-        10 + 2 * sky.east - 3 * sky.north, source, (), "per_unit_area", "Jy/arcsec2"
+        10 + 2 * sky.east - 3 * sky.north, source, (), Measure.density("grid"), "Jy"
     )
     target_sky = target.orientation.detector_to_sky(*target.coordinates())
     expected = 10 + 2 * target_sky.east - 3 * target_sky.north
@@ -302,7 +347,7 @@ def test_resample_composes_anisotropic_rotation_and_orientation():
     np.testing.assert_allclose(target.pixel_area, 0.34, rtol=0, atol=1e-16)
     # Refinement (area ratio 0.34): per-pixel flux is the sampled density
     # times the target pixel area, exact for the affine ramp.
-    refined = resample(replace(image, measure="per_pixel"), target)
+    refined = resample(replace(image, measure=Measure.integral()), target)
     np.testing.assert_allclose(refined.data, 0.34 * expected, rtol=0, atol=3e-14)
     # Coarsening (area ratio 3.06): deposition conserves a compact source.
     coarse = replace(
@@ -313,7 +358,7 @@ def test_resample_composes_anisotropic_rotation_and_orientation():
         basis=((1.2, -0.9), (0.6, 2.1)),
     )
     compact = jnp.zeros(source.shape).at[5:7, 6:8].set(1.0)
-    flux = Image(compact, source, (), "per_pixel", "phot/s")
+    flux = Image(compact, source, (), Measure.integral(), "phot/s")
     np.testing.assert_allclose(resample(flux, coarse).data.sum(), 4, rtol=0, atol=3e-14)
 
 
@@ -358,8 +403,8 @@ def test_band_limited_periodic_exactness():
         )
 
     for dtype in (jnp.float32, jnp.float64):
-        for measure in ("per_unit_area", "per_pixel"):
-            source_area = 0.4 * 0.6 if measure == "per_pixel" else 1
+        for measure in (Measure.density("grid"), Measure.integral()):
+            source_area = 0.4 * 0.6 if measure == Measure.integral() else 1
             image = Image(
                 jnp.asarray(field(source) * source_area, dtype=dtype),
                 source,
@@ -372,7 +417,7 @@ def test_band_limited_periodic_exactness():
             shifted = replace(source, shape=(5, 6), center_x=2.57, center_y=1.31)
             for grid in (target, shifted):
                 expected = field(grid)
-                if measure == "per_pixel":
+                if measure == Measure.integral():
                     dx, dy = grid.basis[0][0], grid.basis[1][1]
                     expected = field(grid, dx, dy) * dx * dy
                 actual = resample(image, grid, pad_factor=1)
@@ -394,7 +439,7 @@ def test_band_limited_metadata_and_overrides():
         jnp.arange(20.0).reshape(4, 5),
         source,
         (),
-        "per_unit_area",
+        Measure.density("grid"),
         "flux",
         "band_limited",
     )
@@ -463,7 +508,7 @@ def test_band_limited_period_flux_and_nyquist():
             jnp.asarray(rng.uniform(size=(2, 6, 8)), dtype=dtype),
             source,
             ("time",),
-            "per_pixel",
+            Measure.integral(),
             "flux",
             "band_limited",
         )
@@ -480,7 +525,12 @@ def test_band_limited_period_flux_and_nyquist():
     grid = PixelGrid.regular((4, 4), 1, "arcsec", center=(0, 0))
     rows, cols = np.indices((4, 4))
     checker = Image(
-        (-1.0) ** (rows + cols), grid, (), "per_unit_area", "flux", "band_limited"
+        (-1.0) ** (rows + cols),
+        grid,
+        (),
+        Measure.density("grid"),
+        "flux",
+        "band_limited",
     )
     shifted = replace(grid, center_x=-0.2, center_y=-0.3)
     expected = np.cos(np.pi * (cols + 0.2)) * np.cos(np.pi * (rows + 0.3))
@@ -509,7 +559,7 @@ def test_band_limited_jit_and_transpose_gradient():
         (jnp.float64, "reflect"),
         (jnp.complex128, "reflect"),
     ):
-        for measure in ("per_unit_area", "per_pixel"):
+        for measure in (Measure.density("grid"), Measure.integral()):
             data = jnp.asarray(rng.normal(size=(2, 3, 4)), dtype=dtype)
             if jnp.iscomplexobj(data):
                 data = data + 0.2j * data[::-1]
@@ -535,7 +585,7 @@ def test_band_limited_jit_and_transpose_gradient():
             np.testing.assert_allclose(
                 gradient, expected, rtol=tolerance, atol=tolerance
             )
-            if dtype == jnp.float64 and measure == "per_pixel":
+            if dtype == jnp.float64 and measure == Measure.integral():
                 check_grads(
                     apply,
                     (data,),
@@ -607,8 +657,8 @@ def test_band_limited_airy_aperture(frame):
         airy(*map(np.asarray, source.coordinates())),
         source,
         (),
-        "per_unit_area",
-        "fraction/lod2",
+        Measure.density("grid"),
+        "fraction",
         "band_limited",
     )
     expected = 1 - j0(np.pi * radius) ** 2 - j1(np.pi * radius) ** 2
@@ -670,9 +720,9 @@ def test_reflect_band_limited_constant_and_cosine():
     assert 0 < tx[6, 3] + 0.5 < 3
     assert -0.5 < ty[6, 3] < 6.5
     for dtype in (jnp.float32, jnp.float64):
-        for measure in ("per_unit_area", "per_pixel"):
-            source_area = 0.5**2 if measure == "per_pixel" else 1
-            target_area = 0.23**2 if measure == "per_pixel" else 1
+        for measure in (Measure.density("grid"), Measure.integral()):
+            source_area = 0.5**2 if measure == Measure.integral() else 1
+            target_area = 0.23**2 if measure == Measure.integral() else 1
             image = Image(
                 jnp.full(source.shape, 3 * source_area, dtype=dtype),
                 source,
@@ -696,7 +746,7 @@ def test_reflect_band_limited_constant_and_cosine():
             )
             box = (
                 np.sinc(2 * (0.23 / 0.5) / 16) * np.sinc((0.23 / 0.5) / 14)
-                if measure == "per_pixel"
+                if measure == Measure.integral()
                 else 1
             )
             expected = target_area * (
@@ -742,7 +792,9 @@ def test_reflect_smooth_interior_error():
         x, y = map(np.asarray, grid.coordinates())
         return (1 + 0.1 * x + 0.03 * y + 0.02 * x * y) * np.exp(-0.08 * (x * x + y * y))
 
-    image = Image(field(source), source, (), "per_unit_area", "flux", "band_limited")
+    image = Image(
+        field(source), source, (), Measure.density("grid"), "flux", "band_limited"
+    )
     expected = field(target)
     errors = [
         np.sqrt(
@@ -768,7 +820,9 @@ def test_outside_metadata_and_padding():
     coarsening must keep outside even when reconstruction becomes linear.
     """
     grid = PixelGrid.regular((4, 5), 0.5, "arcsec")
-    image = Image(jnp.arange(20.0).reshape(4, 5), grid, (), "per_unit_area", "flux")
+    image = Image(
+        jnp.arange(20.0).reshape(4, 5), grid, (), Measure.density("grid"), "flux"
+    )
     assert image.outside == "zero"
     with pytest.raises(ValueError, match="outside"):
         replace(image, outside="unknown")
@@ -813,7 +867,7 @@ def test_reflect_local_kernels_outside_footprint():
         "cubic": np.array([1.3125, 0.8125, 2.3125, 5.8125, 11.875, 13.5625]),
     }
     for mode, row in expected_rows.items():
-        for measure in ("per_unit_area", "per_pixel"):
+        for measure in (Measure.density("grid"), Measure.integral()):
             image = Image(samples, source, (), measure, "flux", mode, "reflect")
             for ratio in (1, 2):
                 target = PixelGrid.regular(
@@ -823,7 +877,7 @@ def test_reflect_local_kernels_outside_footprint():
                     center=(1.25 / ratio, 1.25 / ratio),
                 )
                 expected = row[None, ::ratio] + 2 * row[::ratio, None]
-                if measure == "per_pixel":
+                if measure == Measure.integral():
                     expected *= ratio**2
                 np.testing.assert_array_equal(resample(image, target).data, expected)
                 distant = replace(
@@ -835,9 +889,11 @@ def test_reflect_local_kernels_outside_footprint():
             fine = PixelGrid.regular((10, 10), 0.25, "arcsec")
             flat = replace(image, data=jnp.ones(source.shape))
             np.testing.assert_array_equal(
-                resample(flat, fine).data, 0.25 if measure == "per_pixel" else 1
+                resample(flat, fine).data, 0.25 if measure == Measure.integral() else 1
             )
-        zero = Image(jnp.ones(source.shape), source, (), "per_unit_area", "flux", mode)
+        zero = Image(
+            jnp.ones(source.shape), source, (), Measure.density("grid"), "flux", mode
+        )
         exterior = PixelGrid.regular((12, 12), 0.5, "arcsec", center=(4, 4))
         actual = np.asarray(resample(zero, exterior).data)
         expected = np.zeros((12, 12))
@@ -871,7 +927,7 @@ def test_band_limited_zero_wide_gaussian(frame):
             jnp.asarray(density * 0.5**2, dtype=dtype),
             source,
             (),
-            "per_pixel",
+            Measure.integral(),
             "fraction",
             "band_limited",
         )
@@ -891,7 +947,9 @@ def test_band_limited_zero_wide_gaussian(frame):
             assert outside_boxes.any()
             np.testing.assert_array_equal(result[outside_boxes], 0)
             points = resample(
-                replace(image, data=image.data / 0.5**2, measure="per_unit_area"),
+                replace(
+                    image, data=image.data / 0.5**2, measure=Measure.density("grid")
+                ),
                 target,
             )
             np.testing.assert_array_equal(np.asarray(points.data)[outside_centers], 0)
@@ -916,12 +974,14 @@ def test_band_limited_zero_clipped_boxes():
     for dtype in (jnp.float32, jnp.complex128):
         amplitude = 3 + 2j if dtype == jnp.complex128 else 3
         density = jnp.full(source.shape, amplitude, dtype=dtype)
-        image = Image(density * 0.5**2, source, (), "per_pixel", "flux", "band_limited")
+        image = Image(
+            density * 0.5**2, source, (), Measure.integral(), "flux", "band_limited"
+        )
         # Static geometry must not round exterior points onto an edge in float32.
         exterior = PixelGrid.regular((2, 2), 2 + 2e-9, "arcsec")
         np.testing.assert_array_equal(
             resample(
-                replace(image, data=density, measure="per_unit_area"), exterior
+                replace(image, data=density, measure=Measure.density("grid")), exterior
             ).data,
             0,
         )

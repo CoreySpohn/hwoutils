@@ -6,8 +6,7 @@ Choose the operation according to what the samples mean:
 | --- | --- | --- |
 | `map_coordinates` | Point samples reconstructed with nearest, linear, or Keys cubic interpolation | No pixel integration |
 | `resample_flux` | Surface brightness sampled at target pixel centers, then scaled by target area | Approximate target-pixel flux; not strictly conservative |
-| `rebin_flux` | Uniform surface brightness within each source pixel | Conserves covered source-pixel flux by integrating overlaps |
-| `downsample_psf(s)` | Integrated source pixels, same field of view | Exact block sums for integer reductions; overlap integration otherwise |
+| `integrate_footprints` | Piecewise-constant density on a `PixelGrid` | Sums covered source flux within each target cell |
 | `rotate_image` | Periodic Fourier interpolation on a zero-padded grid | Finite-grid, Nyquist, and cropping errors require convergence checks |
 
 ## Keys cubic interpolation
@@ -49,29 +48,45 @@ Use this operation when a smooth reconstructed image is needed, such as
 aperture-boundary oversampling. Check convergence of the aperture measurement;
 conserving a global sum alone does not establish correct local photometry.
 
-Use `rebin_flux` for conservative axis-aligned changes of pixel grid:
+## Measures and conservative integration
 
-This example requires a user-provided image array, `image`.
+An `Image` has a numerator unit and a spatial measure. For example, photon
+radiance on an arcsec grid has quantity `"ph s^-1 m^-2 nm^-1"` and measure
+`Measure.density("sr")`. Its `integrated()` method multiplies the center
+sample by the cell's solid angle in steradians. A density with denominator
+`"grid"` instead uses the squared coordinate unit. To use steradians with a
+lambda/D grid, convert the grid through its frame at the relevant wavelength.
+Carry cell integrals through the coordinate change, then call `density("sr")`
+on the resulting arcsec image. Transmission and contrast use
+`Measure.intensive()` and retain their values under center sampling.
+
+Use explicit source and target geometry to integrate a PSF. Here `psf` is a
+100 by 100 array of photon rates integrated over source pixels.
 
 ```python notest
-from hwoutils.transforms import rebin_flux
+from hwoutils.grids import (
+    Image,
+    Measure,
+    PixelGrid,
+    footprint_overlap,
+    integrate_footprints,
+)
 
-rebinned = rebin_flux(image, pixscale_src=1.0, pixscale_tgt=2.5, shape_tgt=(40, 40))
+source = PixelGrid.regular(psf.shape, 1.0, "arcsec")
+target = PixelGrid.regular((40, 40), 2.5, "arcsec")
+image = Image(psf, source, (), Measure.integral(), "ph/s")
+overlap = footprint_overlap(source, target)
+rebinned = integrate_footprints(image, overlap)
 ```
 
-Each output is the sum of source-pixel flux multiplied by the fraction of each
-source pixel overlapped by the target pixel. The grids share their geometric
-center. Positive pixel scales are required. Outside the input footprint the
-brightness is zero. If the output covers the whole input, all source fractions
-sum to one; if it crops the input, uncovered flux is lost without renormalization.
-This piecewise-constant reconstruction preserves positivity. It does not infer
-sub-pixel optical structure, provide ideal low-pass filtering, or implement
-rotated polygon overlaps.
-
-`downsample_psf` and `downsample_psfs` use this model with fixed field of view.
-They reject upsampling and aspect-ratio changes because a single returned
-pixel scale cannot describe unequal axis scaling. For aligned integer ratios,
-block summation avoids forming overlap matrices.
+Each target cell receives the fraction of every source integral covered by
+its footprint. Density samples use the midpoint rule within their cells.
+The field is zero beyond the source. A target that tiles the source conserves
+the total flux to floating-point precision. Rotation, shear, different
+centers, and leading array dimensions are supported. Construct overlap
+weights once on the host and reuse them with traced image values. To
+collect several grids, pass a sequence of target grids. The result has a
+final cell axis in grid order, with each grid flattened in row-major order.
 
 ## Fourier rotation
 
