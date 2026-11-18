@@ -12,7 +12,7 @@ from hwoutils import constants as const
 from hwoutils import conversions as conv
 from hwoutils.grids import Image, PixelGrid, resample
 from hwoutils.random_fields import StationaryGaussianField, radial_frequency
-from hwoutils.spectral import Band, Transmission, spectral_knots, trapezoid_weights
+from hwoutils.spectral import Band, Transmission, spectral_breaks, trapezoid_weights
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -88,15 +88,15 @@ def test_transmission_support_moments_band_integrals_and_transforms():
         rtol=2e-14,
         atol=0,
     )
-    np.testing.assert_array_equal(spectral_knots(curve), [400, 500, 700])
+    np.testing.assert_array_equal(spectral_breaks(curve), [400, 500, 700])
     np.testing.assert_allclose(curve.mean_nm, 1600 / 3, rtol=2e-14)
     np.testing.assert_allclose(
-        curve.integrate(Band(300, 800), n_nodes=1), 150, rtol=2e-14
+        curve.integrate(Band(300, 800), order=1), 150, rtol=2e-14
     )
     band = Band(450, 600)
-    np.testing.assert_allclose(curve.integrate(band, n_nodes=1), 225 / 2, rtol=2e-14)
+    np.testing.assert_allclose(curve.integrate(band, order=1), 225 / 2, rtol=2e-14)
     np.testing.assert_allclose(
-        jax.jit(lambda t: t.integrate(band, lambda w: w, n_nodes=2))(curve),
+        curve.integrate(band, lambda w: w, order=2),
         58750,
         rtol=2e-14,
     )
@@ -104,13 +104,13 @@ def test_transmission_support_moments_band_integrals_and_transforms():
         curve.integrate(
             band,
             lambda w: jnp.array([1.0, jnp.maximum(w - 550, 0)]),
-            n_nodes=2,
-            knots_nm=jnp.array([550.0]),
+            order=2,
+            breaks_nm=jnp.array([550.0]),
         ),
         [225 / 2, (3 / 4) * 50**2 / 2 - 50**3 / 600],
         rtol=2e-14,
     )
-    hat = Transmission.tophat(550, 100)
+    hat = Transmission.from_band(Band(500, 600))
     np.testing.assert_array_equal(hat(jnp.array([499, 500, 600, 601])), [0, 1, 1, 0])
     assert hat.low_nm == 500 and hat.high_nm == 600
     np.testing.assert_allclose(hat.mean_nm, 550, rtol=2e-14)

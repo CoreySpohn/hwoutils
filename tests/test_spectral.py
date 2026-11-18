@@ -6,16 +6,18 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from hwoutils.grids import Image, PixelGrid
 from hwoutils.spectral import (
     Band,
     Quadrature,
+    SpectralBreaks,
+    Transmission,
     _overlap_fractions,
-    bin_mean,
-    integrate,
     rebin_bands,
-    spectral_knots,
+    spectral_breaks,
 )
 from hwoutils.transforms import rebin_flux
 
@@ -27,19 +29,35 @@ def precision():
     jax.clear_caches()
 
 
-def test_band_partitions_share_exact_edges():
-    """Fails if partitions have gaps or change the endpoints; no tolerance.
-
-    Shared edges must be bitwise equal, even for logarithmic channels.
-    """
-    band = Band(410.1, 987.3)
+@given(lo=st.floats(100, 599), hi=st.floats(600, 2000))
+def test_band_operations_preserve_supplied_edges(lo, hi):
+    """Fails if partitioning, building, slicing or integrating rounds an endpoint."""
+    band = Band(lo, hi)
     for spacing in ("linear", "log"):
         channels = band.channels(7, spacing)
-        assert channels[0].lo_nm == band.lo_nm
-        assert channels[-1].hi_nm == band.hi_nm
-        for left, right in pairwise(channels):
-            assert np.float64(left.hi_nm).tobytes() == np.float64(right.lo_nm).tobytes()
-        assert all(c.width_nm > 0 for c in channels)
+        rule = Quadrature.build(channels, order=1)
+        assert rule.bands[0].lo_nm.hex() == lo.hex()
+        assert rule.bands[-1].hi_nm.hex() == hi.hex()
+        for left, right in pairwise(rule.bands):
+            assert left.hi_nm.hex() == right.lo_nm.hex()
+        for i, channel in enumerate(channels):
+            row = rule.band(i)
+            assert row.bands == (channel,)
+            assert float(row.weights_nm[0, 0]).hex() == channel.width_nm.hex()
+    with jax.enable_x64(False):
+        # Host support must survive even when device evaluation uses float32.
+        hat = Transmission.from_band(band)
+        assert float(hat.low_nm).hex() == lo.hex()
+        assert float(hat.high_nm).hex() == hi.hex()
+    hat = Transmission.from_band(band)
+    assert float(hat.low_nm).hex() == lo.hex()
+    assert float(hat.high_nm).hex() == hi.hex()
+    assert float(hat.integrate(band, order=1)).hex() == (hi - lo).hex()
+
+
+def test_band_validates_geometry():
+    """Fails if invalid edge order or spacing creates unusable quadrature geometry."""
+    band = Band(410.1, 987.3)
     assert band == Band(np.float64(410.1), 987.3)
     assert hash(band) == hash(Band(410.1, 987.3))
     for lo, hi in ((0, 1), (2, 1), (1, np.inf), (np.nan, 2)):
@@ -51,7 +69,7 @@ def test_band_partitions_share_exact_edges():
         band.channels(3, "invalid")
 
 
-def test_knot_quadrature_weights_and_piecewise_linear_integral():
+def test_split_quadrature_weights_and_piecewise_linear_integral():
     """Fails if kinks are unsplit or padding carries weight.
 
     Order one exactly integrates each linear segment. rtol=3e-15, atol=0 allows
@@ -63,7 +81,7 @@ def test_knot_quadrature_weights_and_piecewise_linear_integral():
     widths = np.array([b.width_nm for b in bands])
     expected = np.array([51.5, 6.0, 22.0])
     for order in (1, 3):
-        rule = Quadrature.build(bands, knots, order)
+        rule = Quadrature.build(bands, order=order, breaks_nm=knots)
         np.testing.assert_array_max_ulp(
             np.asarray(rule.weights_nm.sum(-1)), widths, maxulp=4
         )
@@ -76,20 +94,24 @@ def test_knot_quadrature_weights_and_piecewise_linear_integral():
         )
         values = 2 + rule.nodes_nm + 3 * jnp.maximum(rule.nodes_nm - 2, 0)
         np.testing.assert_allclose(rule.integrate(values), expected, rtol=3e-15, atol=0)
+        padded_values = jnp.where(padded, jnp.nan, values)
+        np.testing.assert_allclose(
+            rule.integrate(padded_values), expected, rtol=3e-15, atol=0
+        )
+        assert np.isnan(rule.integrate(values.at[0, 0].set(jnp.nan))[0])
         vector = jnp.stack((values, -2 * values), axis=-1)
         result = jax.jit(lambda q, v: q.integrate(v))(rule, vector)
         np.testing.assert_allclose(
             result, expected[:, None] * [1, -2], rtol=3e-15, atol=0
         )
-    centers = np.array([b.center_nm for b in bands])
-    actual = integrate(
-        lambda w: 2 + w + 3 * jnp.maximum(w - 2, 0),
-        centers,
-        widths,
-        n_nodes=1,
-        knots_nm=knots,
-    )
-    np.testing.assert_allclose(actual, expected, rtol=3e-15, atol=0)
+        mean = rule.mean(vector)
+        np.testing.assert_allclose(mean, result / widths[:, None], rtol=3e-15)
+        row = rule.band(1)
+        assert isinstance(row, Quadrature)
+        assert row.bands == (bands[1],)
+        np.testing.assert_array_equal(row.weights_nm, rule.weights_nm[1:2])
+        np.testing.assert_array_equal(row.nodes_nm, rule.nodes_nm[1:2])
+        np.testing.assert_allclose(row.integrate(vector[1:2]), result[1:2], rtol=3e-15)
 
 
 def test_smooth_integrand_converges_over_three_orders():
@@ -102,7 +124,7 @@ def test_smooth_integrand_converges_over_three_orders():
     errors = []
     exact = np.exp(2) - np.exp(1)
     for order in (1, 2, 4):
-        rule = Quadrature.build((Band(1, 2),), (), order)
+        rule = Quadrature.build((Band(1, 2),), order=order)
         value = rule.integrate(jnp.exp(rule.nodes_nm))[0]
         errors.append(abs(float(value) - exact))
     assert errors[1] < errors[0] / 20
@@ -110,98 +132,67 @@ def test_smooth_integrand_converges_over_three_orders():
     assert errors[2] / exact < 1e-9
 
 
-def test_weighted_point_bins_tracing_and_capacity_errors():
-    """Fails if point bins divide by zero, weights drift, or caps truncate kinks.
+def test_monochromatic_selects_an_integrated_rate():
+    """Fails if a monochromatic selection scales the supplied integrated rate."""
+    rule = Quadrature.monochromatic(537.0)
+    assert rule.bands == (Band(537.0, 537.0),)
+    assert rule.bands[0].width_nm == 0
+    np.testing.assert_array_equal(rule.band(0).nodes_nm, [[537.0]])
+    np.testing.assert_array_equal(rule.weights_nm, [[1.0]])
+    rates = jnp.arange(6.0).reshape((1, 1, 2, 3))
+    np.testing.assert_array_equal(rule.integrate(rates), rates[:, 0])
+    with pytest.raises(ValueError, match="monochromatic"):
+        rule.mean(rates)
+    with pytest.raises(ValueError, match="monochromatic"):
+        Quadrature.build(rule.bands)
+    with pytest.raises(ValueError, match="positive-width"):
+        rebin_bands(rule.integrate(rates), rule.bands, rule.bands)
 
-    Weighted mean of a*x under weight x is a*(c+w^2/(12*c)). rtol=3e-15, atol=0
-    covers float64 polynomial arithmetic, including the analytic derivative.
-    """
-    centers = jnp.array([2.0, 3.0, 2.0])
-    widths = jnp.array([1.0, 2.0, 0.0])
-    knots = np.array([0.0, 2.0, 4.0])
 
-    @jax.jit
-    def evaluate(a, c, w):
-        return bin_mean(
-            lambda x: a * x,
-            c,
-            w,
-            n_nodes=2,
-            knots_nm=knots,
-            max_knots=2,
-            weight_fn=lambda x: x,
-        )
+def test_polynomial_exactness_with_declared_breaks():
+    """Fails if the order-four rule loses degree-seven exactness on any piece."""
+    band = Band(1.0, 6.0)
+    curve = Transmission([2, 4], [1, 1])
+    rule = Quadrature.build((band,), curve)
+    x = rule.nodes_nm
+    values = jnp.where(
+        x < 2, (x - 1) ** 7, jnp.where(x < 4, 3 * (x - 2) ** 7, 1 - (x - 4) ** 7)
+    )
+    exact = 1 / 8 + 3 * 2**8 / 8 + 2 - 2**8 / 8
+    np.testing.assert_allclose(rule.integrate(values), [exact], rtol=4e-15, atol=0)
 
-    expected = centers + widths**2 / (12 * centers)
+
+def test_spectral_breaks_require_declarations_and_split_one_node_rule_at_kink():
+    """Fails if undeclared models are accepted or an interpolation kink is missed."""
+    spectrum = Transmission([500, 537, 580], [1, 3, 2])
+    overlapping = Transmission([537, 555], [1, 1])
+    assert isinstance(spectrum, SpectralBreaks)
+    np.testing.assert_array_equal(spectral_breaks(), [])
+    np.testing.assert_array_equal(
+        spectral_breaks(overlapping, spectrum), [500, 537, 555, 580]
+    )
+
+    class Undeclared:
+        wavelengths_nm = (515, 530)
+
+    with pytest.raises(TypeError, match="spectral_breaks_nm"):
+        spectral_breaks(Undeclared())
+
+    band = Band(500, 580)
+    exact = (1 + 3) * 37 / 2 + (3 + 2) * 43 / 2
+    split = Quadrature.build((band,), spectrum, order=1)
     np.testing.assert_allclose(
-        evaluate(1.7, centers, widths), 1.7 * expected, rtol=3e-15, atol=0
+        split.integrate(spectrum(split.nodes_nm)), [exact], rtol=3e-15
     )
-    derivative = jax.grad(lambda a: evaluate(a, centers, widths).sum())(1.7)
-    np.testing.assert_allclose(derivative, expected.sum(), rtol=3e-15, atol=0)
-    np.testing.assert_array_equal(integrate(lambda x: x, centers, jnp.zeros(3)), 0)
-    with pytest.raises(ValueError, match="too small"):
-        bin_mean(
-            lambda x: x, np.array([3.0]), np.array([4.0]), knots_nm=knots, max_knots=1
-        )
-    with pytest.raises(ValueError, match=r"Traced.*max_knots"):
-        jax.jit(lambda c: bin_mean(lambda x: x, c, widths, knots_nm=knots))(centers)
-    with pytest.raises(ValueError, match="widths"):
-        bin_mean(lambda x: x, np.array([1.0]), np.array([-1.0]))
-
-
-def test_spectral_knots_collects_nested_declarations_and_makes_kinks_exact():
-    """Fails if a declaration form or a nested component is missed.
-
-    Basis: exact algebra. A piecewise-linear spectrum with a kink at 537 nm is
-    integrated exactly (to 64 float64 eps) by a two-node rule split at its
-    knots; the unsplit rule over the same band misses the kink by far more.
-    """
-    from dataclasses import dataclass
-
-    @dataclass
-    class Table:
-        wavelengths_nm: np.ndarray
-
-    @dataclass
-    class Hardware:
-        def quadrature_knots_nm(self):
-            return np.array([600.0])
-
-    @dataclass
-    class Molecule:
-        nu_grid: np.ndarray
-
-    @dataclass
-    class System:
-        star: Table
-        parts: tuple
-
-    system = System(
-        star=Table(np.array([500.0, 537.0, 580.0])),
-        parts=(Hardware(), Molecule(np.array([1e7 / 520.0])), None),
-    )
-    knots = spectral_knots(system, None, (np.nan,))
-    np.testing.assert_allclose(knots, [500.0, 520.0, 537.0, 580.0, 600.0], rtol=1e-12)
-
-    def spectrum(x):
-        return np.interp(x, [500.0, 537.0, 580.0], [1.0, 3.0, 2.0])
-
-    exact = 0.5 * (1.0 + 3.0) * 37.0 + 0.5 * (3.0 + 2.0) * 43.0
-    with jax.enable_x64(True):
-        for knots_nm, close in ((knots, True), (None, False)):
-            q = Quadrature.build((Band(500.0, 580.0),), knots_nm, 2)
-            value = float(q.integrate(spectrum(np.asarray(q.nodes_nm)))[0])
-            if close:
-                assert abs(value - exact) <= 64 * np.finfo(float).eps * exact
-            else:
-                assert abs(value - exact) > 1e-3 * exact
+    unsplit = Quadrature.build((band,), order=1)
+    assert abs(float(unsplit.integrate(spectrum(unsplit.nodes_nm))[0]) - exact) > 1
 
 
 def test_rebin_conserves_total_flux():
     """Fails if overlap weights lose flux; float64 floor of 8 eps on exact tiling."""
     src_edges = Band(600.0, 700.0).channels(24, "log")
     dst_edges = Band(600.0, 700.0).channels(8, "log")
-    q = Quadrature.build(src_edges, None, 3)
+    q = Quadrature.build(src_edges, order=3)
     values = q.integrate(q.nodes_nm**2)
     exact = (700.0**3 - 600.0**3) / 3
     assert jnp.allclose(values.sum(), exact, rtol=2e-15, atol=0)
