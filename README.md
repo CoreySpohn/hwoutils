@@ -13,11 +13,11 @@
 
 **hwoutils** is the shared utility foundation for the HWO direct imaging simulation suite. It provides JAX-native physical constants, unit conversions, pixel grids, spectral quadrature, and image transforms used across:
 
-- **[yippy](https://github.com/CoreySpohn/yippy)** — Coronagraph performance modeling
-- **[orbix](https://github.com/CoreySpohn/orbix)** — Orbital dynamics and target scheduling
-- **[coronagraphoto](https://github.com/CoreySpohn/coronagraphoto)** — Image simulation for coronagraphic observations
-- **[coronalyze](https://github.com/CoreySpohn/coronalyze)** — Post-processing and SNR analysis
-- **[hwosim](https://github.com/CoreySpohn/hwosim)** — End-to-end mission simulations
+- **[yippy](https://github.com/CoreySpohn/yippy)**: Coronagraph performance modeling
+- **[orbix](https://github.com/CoreySpohn/orbix)**: Orbital dynamics and target scheduling
+- **[coronagraphoto](https://github.com/CoreySpohn/coronagraphoto)**: Image simulation for coronagraphic observations
+- **[coronalyze](https://github.com/CoreySpohn/coronalyze)**: Post-processing and SNR analysis
+- **[spaceodyssey](https://github.com/CoreySpohn/spaceodyssey)**: End-to-end mission simulations
 
 ## Key Features
 
