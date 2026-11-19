@@ -71,8 +71,11 @@ class _Block(AbstractBlock):
     def sample(self, key, model):
         return {}
 
+    def same_layout(self, other):
+        return type(other) is type(self) and other.owns == self.owns
+
     def same_map(self, other):
-        return True
+        return self.same_layout(other)
 
 
 def _orbit():
@@ -84,7 +87,13 @@ def _mass():
 
 
 def test_a_block_must_define_its_contract():
-    """Fails if a block missing a method or a declaration can be built."""
+    """Fails if a block missing a method (same_layout included) can be built."""
+
+    class NoLayout(_Block):
+        same_layout = AbstractBlock.same_layout
+
+    with pytest.raises(TypeError, match="same_layout"):
+        NoLayout("a")
 
     class Incomplete(AbstractBlock):
         owns: str = "a"

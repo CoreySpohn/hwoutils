@@ -77,7 +77,13 @@ class AbstractBlock(eqx.Module):
 
     @abstractmethod
     def inverse(self, model) -> dict[str, Array]:
-        """Return coordinates whose ``forward`` rebuilds the owned node of ``model``."""
+        """Return coordinates whose ``forward`` rebuilds the owned node of ``model``.
+
+        Where the model value lies outside the support, every coordinate of that
+        entry is NaN. A value outside by no more than rounding is held at the
+        boundary; one outside by more is never clipped onto it. NaN propagates through
+        every consumer, so a host marks the draw dead with ``isfinite``.
+        """
 
     @abstractmethod
     def log_prob(self, x: dict[str, ArrayLike], model) -> Array:
@@ -106,11 +112,22 @@ class AbstractBlock(eqx.Module):
         raise NotImplementedError(f"{type(self).__name__} has no unit-cube map")
 
     @abstractmethod
-    def same_map(self, other) -> bool:
-        """Whether ``other`` writes the same paths from the same coordinates.
+    def same_layout(self, other) -> bool:
+        """Whether ``other`` is equal to this block in everything but the law.
 
-        True when everything but the law is equal, so that swapping ``other`` in
-        changes the density and nothing else. Evaluated on the host.
+        True when the two have the same type, ownership and reads, chart type and
+        rows (whatever the concrete block's coordinates are made of), so that
+        ``other`` can replace this block in a fit. The law, and any bound it
+        carries, is not compared. Evaluated on the host.
+        """
+
+    @abstractmethod
+    def same_map(self, other) -> bool:
+        """Whether ``same_layout`` holds and the mapped support is the same.
+
+        True when swapping ``other`` in changes the density and nothing else, so
+        coordinates drawn for this block stay valid for ``other``. False when that
+        cannot be decided statically (a traced bound). Evaluated on the host.
         """
 
 
