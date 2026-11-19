@@ -21,10 +21,11 @@
 
 ## Key Features
 
-- **Physical Constants** — Single source of truth for SI constants, conversion factors, and astronomical quantities
-- **Unit Conversions** — Conversion functions (angular, flux, distance, time) with zero astropy overhead; NumPy arrays and JAX arrays both work
-- **Image Transforms** — Flux-conserving resampling, sub-pixel shifts, and cubic spline interpolation
-- **JAX Extra** — The image transforms are JIT-compilable, differentiable, and GPU-accelerated (`pip install "hwoutils[jax]"`)
+- **Physical Constants**: Single source of truth for SI constants, conversion factors, and astronomical quantities
+- **Unit Conversions**: Conversion functions (angular, flux, distance, time) with zero astropy overhead; NumPy arrays and JAX arrays both work
+- **Image Transforms**: Flux-conserving resampling, sub-pixel shifts, and cubic spline interpolation
+- **JAX Extra**: The image transforms are JIT-compilable, differentiable, and GPU-accelerated (`pip install "hwoutils[jax]"`)
+- **Model Paths and Blocks**: Dotted paths that read and replace a node of a model (`hwoutils.model_paths`), and the contract of a fit's free entry that owns a node (`hwoutils.blocks`), behind the `jax` extra
 
 ## Installation
 
@@ -66,7 +67,9 @@ budgets. Add `pytest_plugins = ["hwoutils.testbudget.plugin"]` to the top-level
 
 ## Documentation
 
-For the shared repository text guard and pytest plugin, see the
+For model paths and the block contract, see the
+[model paths and blocks guide](docs/model_paths_and_blocks.md). For the shared
+repository text guard and pytest plugin, see the
 [internal reference guard guide](docs/internal_refs.md).
 
 Full documentation is available at [hwoutils.readthedocs.io](https://hwoutils.readthedocs.io).
