@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import pytest
 
 from hwoutils.blocks import AbstractBlock, block_order, check_writers
-from hwoutils.model_paths import assign, paths_overlap, resolve
+from hwoutils.model_paths import assign, join, paths_overlap, resolve
 
 
 class _Star(eqx.Module):
@@ -31,7 +31,7 @@ def test_resolve_reads_attributes_and_tuple_indices():
 
 def test_resolve_refuses_malformed_paths():
     """Fails if a path with an empty step or a bare index is accepted."""
-    for path in ("star..mass_Msun", "[0]", "planets[x]", ""):
+    for path in ("star..mass_Msun", "[0]", "planets[x]", ".star"):
         with pytest.raises(ValueError, match="malformed"):
             resolve(_model(), path)
 
@@ -145,3 +145,23 @@ def test_periods_are_static_and_aligned_with_the_coordinate_names():
         "x": None,
         "phase": 6.283185307179586,
     }
+
+
+def test_the_empty_path_is_the_model_and_overlaps_everything():
+    """Fails if the empty path does not read, replace or overlap as the model root."""
+    model = _model()
+    assert resolve(model, "") is model
+    assert assign(model, "", 5) == 5
+    assert paths_overlap("", "star.mass_Msun") and paths_overlap("planets[0]", "")
+    assert paths_overlap("", "")
+
+
+def test_join_handles_empty_and_indexed_segments():
+    """Fails if a join leaves a stray dot or drops a segment."""
+    assert join("", "star.mass_Msun") == "star.mass_Msun"
+    assert join("scene", "") == "scene"
+    assert join("", "") == ""
+    assert join("planets", "[1].mass") == "planets[1].mass"
+    assert join("scene", "star.mass") == "scene.star.mass"
+    model = _model()
+    assert resolve(model, join("", join("planets", "[1]"))) == 3.0
