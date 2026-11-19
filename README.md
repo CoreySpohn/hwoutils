@@ -11,7 +11,7 @@
 
 # hwoutils
 
-**hwoutils** is the shared utility foundation for the HWO direct imaging simulation suite. It provides JAX-native physical constants, unit conversions, and flux-conserving image transforms used across:
+**hwoutils** is the shared utility foundation for the HWO direct imaging simulation suite. It provides JAX-native physical constants, unit conversions, pixel grids, spectral quadrature, and image transforms used across:
 
 - **[yippy](https://github.com/CoreySpohn/yippy)** — Coronagraph performance modeling
 - **[orbix](https://github.com/CoreySpohn/orbix)** — Orbital dynamics and target scheduling
@@ -21,10 +21,12 @@
 
 ## Key Features
 
-- **Physical Constants** — Single source of truth for SI constants, conversion factors, and astronomical quantities
-- **Unit Conversions** — Pure JAX conversion functions (angular, flux, distance, time) with zero astropy overhead
-- **Image Transforms** — Flux-conserving resampling, sub-pixel shifts, and cubic spline interpolation
-- **JAX-Native** — All operations are JIT-compilable, differentiable, and GPU-accelerated
+- **Physical Constants**: Single source of truth for SI constants, conversion factors, and astronomical quantities
+- **Unit Conversions**: Pure JAX conversion functions (angular, flux, distance, time) with zero astropy overhead
+- **Grids and Images**: `PixelGrid`, `Image`, `Measure` and `SkyOrientation` in `hwoutils.grids`, with conservative pixel-footprint integration
+- **Spectral Quadrature**: `Band`, `Quadrature` and `spectral_breaks` in `hwoutils.spectral`, splitting each band at the breaks its models declare
+- **Image Transforms**: Smooth resampling, sub-pixel shifts, rotation, and Keys cubic interpolation
+- **JAX-Native**: All operations are JIT-compilable, differentiable, and GPU-accelerated
 
 ## Installation
 
@@ -52,7 +54,7 @@ from hwoutils.transforms import resample_flux
 # Convert 5 arcsec to lambda/D for a 6m telescope at 550nm
 sep_lod = conv.arcsec_to_lambda_d(5.0, 550.0, 6.0)
 
-# Flux-conserving PSF resampling
+# Smooth PSF resampling, scaled by the target pixel area
 resampled = resample_flux(psf, pixscale_src=0.01, pixscale_tgt=0.1, shape_tgt=(64, 64))
 ```
 

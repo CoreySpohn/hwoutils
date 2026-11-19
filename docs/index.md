@@ -11,10 +11,14 @@ libraries (yippy, orbix, coronagraphoto, coronalyze):
   count before JAX initializes
 - **Constants** -- physical and mission constants
 - **Conversions** -- unit and coordinate transforms
-- **Image transforms** -- flux-conserving resampling, downsampling, and
-  subpixel interpolation via JAX
+- **Grids and images** -- `PixelGrid`, `Image`, `Measure` and
+  `SkyOrientation`, with conservative pixel-footprint integration
+- **Spectral quadrature** -- `Band`, `Quadrature` and `spectral_breaks`
+- **Image transforms** -- smooth resampling, rotation, and subpixel shifts
+  via JAX
 - **Radial profiles** -- azimuthal averaging for 2D images
-- **Map coordinates** -- B-spline interpolation on regular grids
+- **Map coordinates** -- nearest, linear and Keys cubic interpolation on
+  regular grids
 
 ## Spectral integration
 
