@@ -32,6 +32,9 @@ class AbstractBlock(eqx.Module):
     support beyond one cell must wrap the proposal onto the cell. Every other coordinate
     is non-periodic and :meth:`log_prob` is normalized over the real line.
 
+    :meth:`log_prob` returns ``-inf``, never NaN or ``+inf``, where the density is zero
+    or the arithmetic overflows (coordinates of 1e5, say).
+
     Every method is per draw; a host batches with ``jax.vmap``. ``reads`` and ``writes``
     are static tuples of model paths. ``writes`` starts with ``owns`` and lists any
     further path the block sets, such as a mass the coordinates imply. A block never
