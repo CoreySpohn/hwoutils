@@ -90,7 +90,7 @@ final cell axis in grid order, with each grid flattened in row-major order.
 
 ## Fourier rotation
 
-`rotate_image(image, rotation_deg, pad_factor=0.5, center=None)` rotates
+`rotate_image(image, rotation_deg, *, pad_factor=0.5, center=None)` rotates
 counter-clockwise when displayed with `origin="lower"`. The default center is
 `((N-1)/2, (N-1)/2)`. FITS optical centers can differ, so pass `center=(row, column)`
 explicitly when rotating around the optical axis.
