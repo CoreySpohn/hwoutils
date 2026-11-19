@@ -24,7 +24,8 @@ def resolve(model, path: str):
         The value at the path.
 
     Raises:
-        ValueError: If the path is malformed.
+        ValueError: If the path is malformed or a ``[k]`` follows anything but a
+            tuple or list.
     """
     value = model
     for part in path.split("."):
@@ -33,6 +34,11 @@ def resolve(model, path: str):
             raise ValueError(f"malformed model path {path!r}")
         value = getattr(value, found.group(1))
         for index in _INDEX.findall(found.group(2)):
+            if not isinstance(value, tuple | list):
+                raise ValueError(
+                    f"model path {path!r}: [k] indexes a tuple or list, "
+                    "not an array axis"
+                )
             value = value[int(index)]
     return value
 
@@ -47,6 +53,9 @@ def assign(model, path: str, value):
 
     Returns:
         A copy of ``model`` holding ``value`` at the path.
+
+    Raises:
+        ValueError: As for :func:`resolve`.
     """
     return eqx.tree_at(lambda m: resolve(m, path), model, value)
 
