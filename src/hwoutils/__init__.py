@@ -1,7 +1,8 @@
 """hwoutils -- Shared utilities for the HWO simulation suite.
 
-Constants, conversions and ``Epoch`` need only NumPy. The JAX modules need
-the ``hwoutils[jax]`` extra and import JAX themselves.
+Constants, conversions and ``Epoch`` need only NumPy. The JAX modules, including
+the Equinox-based ``blocks`` and ``model_paths``, need the ``hwoutils[jax]`` extra and
+import JAX themselves.
 """
 
 from importlib import import_module as _import_module
