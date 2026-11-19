@@ -52,7 +52,7 @@ def w_per_nm_per_m2_to_photons_per_nm_per_m2(flux_w, wavelength_nm):
 def w_per_nm_per_m2_to_cgs_per_wavenumber(flux_w, wavelength_nm):
     """Convert W/m^2/nm to erg/s/cm^2/(cm^-1), retaining any per-sr factor.
 
-    Apply |d(lambda_nm)/d(nu_cm)| = lambda_nm^2 / cm2nm.
+    Apply ``|d(lambda_nm)/d(nu_cm)| = lambda_nm^2 / cm2nm``.
     This changes the density coordinate only, with no solid-angle integral.
     """
     return flux_w * (const.J2erg * const.cm22m2 / const.cm2nm) * wavelength_nm**2
