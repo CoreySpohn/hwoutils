@@ -57,6 +57,7 @@ class _Block(AbstractBlock):
     owns: str = eqx.field(static=True)
     reads: tuple[str, ...] = eqx.field(static=True, default=())
     writes: tuple[str, ...] = eqx.field(static=True, default=())
+    coordinate_names: tuple[str, ...] = eqx.field(static=True, default=("a", "b"))
 
     def forward(self, x, model):
         return {}
@@ -120,3 +121,27 @@ def test_a_read_cycle_is_refused():
     b = _Block("b", ("a",), ("b",))
     with pytest.raises(ValueError, match="cycle"):
         block_order({"a": a, "b": b})
+
+
+def test_a_block_defaults_to_non_periodic_with_no_unit_map():
+    """Fails if a plain block claims a period or a unit-cube map it does not have."""
+    block = _orbit()
+    assert block.periods == (None, None)
+    assert block.unit_size is None
+    with pytest.raises(NotImplementedError, match="no unit-cube map"):
+        block.from_unit(jnp.zeros(1), _model())
+
+
+def test_periods_are_static_and_aligned_with_the_coordinate_names():
+    """Fails if a subclass cannot declare periods aligned with its names."""
+
+    class Wrapped(_Block):
+        @property
+        def periods(self):
+            return (None, 6.283185307179586)
+
+    block = Wrapped("a", coordinate_names=("x", "phase"))
+    assert dict(zip(block.coordinate_names, block.periods, strict=True)) == {
+        "x": None,
+        "phase": 6.283185307179586,
+    }
