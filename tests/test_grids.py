@@ -1013,3 +1013,66 @@ def test_band_limited_zero_clipped_boxes():
             np.testing.assert_allclose(
                 sampled.data, expected, rtol=tolerance, atol=tolerance
             )
+
+
+@pytest.mark.parametrize("outside", ["zero", "reflect"])
+@pytest.mark.parametrize(
+    ("measure", "reconstruction"),
+    [
+        (Measure.integral(), "band_limited"),
+        (Measure.intensive(), "band_limited"),
+        (Measure.intensive(), "linear"),
+        (Measure.integral(), "linear"),
+    ],
+)
+def test_traced_wavelength_resample_matches_host_and_differentiates(
+    frame, outside, measure, reconstruction
+):
+    """Fails if a traced wavelength changes resample values or its gradient.
+
+    A target at lambda/D scale built from a traced wavelength must match the
+    host-built grid to roundoff, compile once for any value, and have a
+    wavelength derivative equal to a central difference.
+    """
+    source = PixelGrid.regular((17, 17), 0.3, "lod", frame=frame)
+    detector = PixelGrid.regular((12, 12), 0.01, "arcsec")
+    data = np.random.default_rng(3).random((17, 17))
+    image = Image(data, source, (), measure, "x", reconstruction, outside)
+
+    def render(wavelength):
+        return resample(image, detector.to_lod(wavelength, frame)).data
+
+    for wavelength in (500.0, 640.0):
+        np.testing.assert_allclose(
+            jax.jit(render)(wavelength), render(wavelength), rtol=1e-12, atol=1e-14
+        )
+
+    def scalar(wavelength):
+        return jnp.sum(render(wavelength) ** 2)
+
+    h = 1e-3
+    fd = (scalar(600.0 + h) - scalar(600.0 - h)) / (2 * h)
+    np.testing.assert_allclose(jax.grad(scalar)(600.0), fd, rtol=1e-6)
+
+
+def test_traced_roll_orientation_matches_host_values():
+    """Fails if a traced position angle disagrees with the host conversion."""
+    east, north = jnp.array([0.3, -1.2]), jnp.array([0.7, 0.4])
+    for parity in (-1, 1):
+        host = SkyOrientation(37.0, parity)
+        traced = jax.jit(
+            lambda angle, parity=parity: tuple(
+                SkyOrientation(angle, parity).sky_to_detector(east, north)
+            )
+        )(37.0)
+        np.testing.assert_allclose(
+            traced, host.sky_to_detector(east, north), atol=1e-15
+        )
+        back = jax.jit(
+            lambda x, y, angle, parity=parity: tuple(
+                SkyOrientation(angle, parity).detector_to_sky(x, y)
+            )
+        )(*host.sky_to_detector(east, north), 37.0)
+        np.testing.assert_allclose(back, (east, north), atol=1e-15)
+    with pytest.raises(ValueError, match="finite"):
+        SkyOrientation(float("nan"))

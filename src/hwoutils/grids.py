@@ -27,6 +27,25 @@ class _XY(NamedTuple):
     y: object
 
 
+def _traced(*values) -> bool:
+    """Whether any value, or any entry of a nested sequence, is a JAX tracer."""
+    for value in values:
+        if isinstance(value, jax.core.Tracer):
+            return True
+        if isinstance(value, (tuple, list)) and _traced(*value):
+            return True
+    return False
+
+
+def _cos_sin(angle_deg):
+    """Cosine and sine of a degree angle; host floats unless the angle is traced."""
+    if isinstance(angle_deg, jax.core.Tracer):
+        angle = jnp.radians(angle_deg)
+        return jnp.cos(angle), jnp.sin(angle)
+    angle = math.radians(angle_deg)
+    return math.cos(angle), math.sin(angle)
+
+
 @dataclass(frozen=True)
 class Frame:
     """Definition of one lambda/D, including the declared diameter convention.
@@ -70,6 +89,10 @@ class SkyOrientation:
     x=parity*(E*c-N*s), y=E*s+N*c, with determinant parity. For parity +1,
     x=E*c-N*s; for the inside-sphere parity -1, x=-E*c+N*s. The inverse
     is the transpose since both detector axes are orthonormal.
+
+    pa_y_deg may be a traced value inside a JAX transformation. Such an
+    orientation is only for use within that transformation: it cannot be
+    compared with another traced angle and must not be returned in a grid.
     """
 
     pa_y_deg: float
@@ -77,26 +100,23 @@ class SkyOrientation:
 
     def __post_init__(self):
         """Canonicalize host values and reject undefined orientations."""
-        object.__setattr__(self, "pa_y_deg", float(self.pa_y_deg))
+        if not isinstance(self.pa_y_deg, jax.core.Tracer):
+            object.__setattr__(self, "pa_y_deg", float(self.pa_y_deg))
+            if not math.isfinite(self.pa_y_deg):
+                raise ValueError("orientation needs finite pa_y_deg")
         object.__setattr__(self, "parity", index(self.parity))
-        if not math.isfinite(self.pa_y_deg) or self.parity not in (-1, 1):
-            raise ValueError("orientation needs finite pa_y_deg and parity -1 or +1")
+        if self.parity not in (-1, 1):
+            raise ValueError("orientation needs parity -1 or +1")
 
     def sky_to_detector(self, east, north):
         """Map east/north offsets to named detector (x, y) offsets."""
-        c, s = (
-            math.cos(math.radians(self.pa_y_deg)),
-            math.sin(math.radians(self.pa_y_deg)),
-        )
+        c, s = _cos_sin(self.pa_y_deg)
         east, north = jnp.asarray(east), jnp.asarray(north)
         return _XY(self.parity * (east * c - north * s), east * s + north * c)
 
     def detector_to_sky(self, x, y):
         """Return named (east, north) offsets in the sky plane."""
-        c, s = (
-            math.cos(math.radians(self.pa_y_deg)),
-            math.sin(math.radians(self.pa_y_deg)),
-        )
+        c, s = _cos_sin(self.pa_y_deg)
         x, y = jnp.asarray(x), jnp.asarray(y)
         return _Sky(self.parity * c * x + s * y, -self.parity * s * x + c * y)
 
@@ -104,6 +124,16 @@ class SkyOrientation:
 class _Sky(NamedTuple):
     east: object
     north: object
+
+
+def _checked_wavelength(wavelength_nm):
+    """Return a concrete positive float, or a traced wavelength unchanged."""
+    if isinstance(wavelength_nm, jax.core.Tracer):
+        return wavelength_nm
+    wavelength_nm = float(wavelength_nm)
+    if not math.isfinite(wavelength_nm) or wavelength_nm <= 0:
+        raise ValueError("wavelength_nm must be positive and finite")
+    return wavelength_nm
 
 
 @jax.tree_util.register_static
@@ -114,6 +144,12 @@ class PixelGrid:
     shape is (ny, nx), center_x/center_y are pixel-center coordinates, and
     basis is a nonsingular 2 by 2 tuple. frame is mandatory for unit='lod'.
     orientation, when present, relates the unit plane to the east/north sky.
+
+    Inside a JAX transformation to_lod and to_arcsec accept a traced
+    wavelength, and the returned grid then carries traced basis entries
+    (shape, centers, unit and frame stay host values). Such a grid is for use
+    within that transformation: resample builds its operators from the traced
+    scale; do not return it or compare it with another grid.
     """
 
     shape: tuple[int, int]
@@ -129,16 +165,20 @@ class PixelGrid:
         shape = tuple(index(n) for n in self.shape)
         if len(shape) != 2 or min(shape) < 1:
             raise ValueError("shape must contain positive (ny, nx)")
-        basis = np.asarray(self.basis, dtype=np.float64)
-        if basis.shape != (2, 2) or not np.all(np.isfinite(basis)):
-            raise ValueError("basis must be finite with shape (2, 2)")
-        determinant = basis[0, 0] * basis[1, 1] - basis[0, 1] * basis[1, 0]
-        if not np.isfinite(determinant) or determinant == 0:
-            raise ValueError("basis must be nonsingular with finite determinant")
+        if _traced(self.basis):
+            if len(self.basis) != 2 or any(len(row) != 2 for row in self.basis):
+                raise ValueError("basis must have shape (2, 2)")
+            basis = tuple(tuple(row) for row in self.basis)
+        else:
+            basis = np.asarray(self.basis, dtype=np.float64)
+            if basis.shape != (2, 2) or not np.all(np.isfinite(basis)):
+                raise ValueError("basis must be finite with shape (2, 2)")
+            determinant = basis[0, 0] * basis[1, 1] - basis[0, 1] * basis[1, 0]
+            if not np.isfinite(determinant) or determinant == 0:
+                raise ValueError("basis must be nonsingular with finite determinant")
+            basis = tuple(tuple(map(float, row)) for row in basis)
         object.__setattr__(self, "shape", shape)
-        object.__setattr__(
-            self, "basis", tuple(tuple(map(float, row)) for row in basis)
-        )
+        object.__setattr__(self, "basis", basis)
         for name in ("center_x", "center_y"):
             value = float(getattr(self, name))
             if not math.isfinite(value):
@@ -291,17 +331,16 @@ class PixelGrid:
         return self.pixel_area * arcsec2rad**2
 
     def to_arcsec(self, wavelength_nm) -> "PixelGrid":
-        """Convert a lod grid at a concrete wavelength to static arcsec geometry.
+        """Convert a lod grid at a wavelength to arcsec geometry.
 
         The basis scales by lambda/D at wavelength_nm, preserving centers and
-        retaining the frame. Static grid creation is a host operation; use
-        Frame.lod_to_arcsec for traced wavelength calculations.
+        retaining the frame. A concrete wavelength gives host geometry; a
+        traced one gives a grid with traced basis entries for use inside the
+        transformation (see the class docstring).
         """
         if self.unit != "lod":
             raise ValueError("to_arcsec requires a lod grid")
-        wavelength_nm = float(wavelength_nm)
-        if not math.isfinite(wavelength_nm) or wavelength_nm <= 0:
-            raise ValueError("wavelength_nm must be positive and finite")
+        wavelength_nm = _checked_wavelength(wavelength_nm)
         scale = self.frame.lod_to_arcsec(wavelength_nm)
         basis = tuple(tuple(value * scale for value in row) for row in self.basis)
         return PixelGrid(
@@ -315,12 +354,14 @@ class PixelGrid:
         )
 
     def to_lod(self, wavelength_nm, frame: Frame) -> "PixelGrid":
-        """Convert an arcsec grid to static lambda/D geometry in the given frame."""
+        """Convert an arcsec grid to lambda/D geometry in the given frame.
+
+        A traced wavelength gives a grid with traced basis entries for use
+        inside the transformation (see the class docstring).
+        """
         if self.unit != "arcsec":
             raise ValueError("to_lod requires an arcsec grid")
-        wavelength_nm = float(wavelength_nm)
-        if not math.isfinite(wavelength_nm) or wavelength_nm <= 0:
-            raise ValueError("wavelength_nm must be positive and finite")
+        wavelength_nm = _checked_wavelength(wavelength_nm)
         scale = frame.lod_to_arcsec(wavelength_nm)
         basis = tuple(tuple(value / scale for value in row) for row in self.basis)
         return PixelGrid(
@@ -490,43 +531,68 @@ def _validate_reconstruction(reconstruction):
         )
 
 
+def _same_orientation(first, second):
+    """Equality that never converts a traced angle to a host bool."""
+    return first is second or (
+        not _traced(first.pa_y_deg, second.pa_y_deg) and first == second
+    )
+
+
 def _pixel_map(source, target):
-    """Compose the static target-to-source linear map through the sky plane."""
+    """Compose the target-to-source linear map through the sky plane.
+
+    The map is a NumPy array for host grids and a JAX array when a basis or an
+    orientation angle is traced.
+    """
     if source.unit != target.unit:
         raise ValueError("mapping requires matching grid units")
     if source.unit == "lod" and source.frame != target.frame:
         raise ValueError("lod mapping requires equal frames")
     if (source.orientation is None) != (target.orientation is None):
         raise ValueError("mapping requires both orientations or neither")
+    angles = (
+        ()
+        if source.orientation is None
+        else (source.orientation.pa_y_deg, target.orientation.pa_y_deg)
+    )
+    xp = jnp if _traced(source.basis, target.basis, angles) else np
 
     def orientation_matrix(orientation):
-        angle = math.radians(orientation.pa_y_deg)
-        c, s = math.cos(angle), math.sin(angle)
-        return np.array([[orientation.parity * c, -orientation.parity * s], [s, c]])
+        c, s = _cos_sin(orientation.pa_y_deg)
+        return xp.array([[orientation.parity * c, -orientation.parity * s], [s, c]])
 
-    transform = np.eye(2)
-    if source.orientation != target.orientation:
+    transform = xp.eye(2)
+    if source.orientation is not None and not _same_orientation(
+        source.orientation, target.orientation
+    ):
         transform = (
             orientation_matrix(source.orientation)
             @ orientation_matrix(target.orientation).T
         )
-    return np.linalg.solve(np.asarray(source.basis), transform @ target.basis)
+    return xp.linalg.solve(
+        xp.asarray(source.basis), transform @ xp.asarray(target.basis)
+    )
 
 
 def _band_limited_matrix(
     n_source, positions, width, pad_factor, dtype, integrate, outside
 ):
-    """Build one target-by-source DFT interpolation or box-integration matrix."""
-    positions = np.asarray(positions)
+    """Build one target-by-source DFT interpolation or box-integration matrix.
+
+    Positions and width may be traced; the matrix is then built with JAX
+    operations and is differentiable in both. Host inputs give a NumPy matrix.
+    """
+    xp = jnp if _traced(positions, width) else np
+    positions = xp.asarray(positions)
     samples = np.arange(n_source, dtype=dtype)
     if outside == "reflect":
         positions = positions.astype(dtype)
         # Pair opposite DFT modes of [d, d[::-1]]: its Nyquist mode is zero.
         frequencies = samples / np.asarray(2 * n_source, dtype=dtype)
         phase = np.asarray(2 * np.pi, dtype=dtype)
-        evaluate = np.cos(phase * (positions[:, None] + 0.5) * frequencies)
+        evaluate = xp.cos(phase * (positions[:, None] + 0.5) * frequencies)
         if integrate:
-            evaluate *= np.sinc(frequencies * np.asarray(width, dtype=dtype))
+            evaluate = evaluate * xp.sinc(frequencies * xp.asarray(width, dtype=dtype))
         analyze = np.cos(phase * frequencies[:, None] * (samples + 0.5))
         analyze[0] *= 0.5
         return (evaluate @ analyze) * np.asarray(2 / n_source, dtype=dtype)
@@ -534,16 +600,16 @@ def _band_limited_matrix(
     frequencies = np.fft.fftfreq(n_padded).astype(dtype)
     phase = np.asarray(2j * np.pi, dtype=np.result_type(dtype, np.complex64))
     if integrate:
-        left = np.clip(positions - width / 2, -0.5, n_source - 0.5)
-        right = np.clip(positions + width / 2, -0.5, n_source - 0.5)
+        left = xp.clip(positions - width / 2, -0.5, n_source - 0.5)
+        right = xp.clip(positions + width / 2, -0.5, n_source - 0.5)
         length = (right - left).astype(dtype)
         positions = ((left + right) / 2).astype(dtype)
-        weights = (length / width)[:, None] * np.sinc(frequencies * length[:, None])
+        weights = (length / width)[:, None] * xp.sinc(frequencies * length[:, None])
     else:
         weights = ((positions >= -0.5) & (positions <= n_source - 0.5))[:, None]
-        positions = np.clip(positions, -0.5, n_source - 0.5).astype(dtype)
-    evaluate = np.exp(phase * positions[:, None] * frequencies)
-    evaluate *= weights
+        positions = xp.clip(positions, -0.5, n_source - 0.5).astype(dtype)
+    evaluate = xp.exp(phase * positions[:, None] * frequencies)
+    evaluate = evaluate * weights
     analyze = np.exp(-phase * frequencies[:, None] * samples)
     return (evaluate @ analyze) / n_padded
 
@@ -654,9 +720,14 @@ def resample(
     selected = image.reconstruction if reconstruction is None else reconstruction
     _validate_reconstruction(selected)
     mapping = _pixel_map(source_grid, target_grid)
+    traced = _traced(source_grid.basis, target_grid.basis)
     output_reconstruction = image.reconstruction
-    if output_reconstruction == "band_limited" and np.any(
-        np.sum(np.abs(mapping), axis=0) > 1 + 32 * np.finfo(float).eps
+    # A traced scale cannot pick the output reconstruction on the host; the
+    # source reconstruction is kept.
+    if (
+        output_reconstruction == "band_limited"
+        and not traced
+        and np.any(np.sum(np.abs(mapping), axis=0) > 1 + 32 * np.finfo(float).eps)
     ):
         output_reconstruction = "linear"
     metadata = (
@@ -672,6 +743,8 @@ def resample(
     data = jnp.asarray(image.data, dtype=jnp.result_type(image.data, 1.0))
     if selected == "band_limited":
         for matrix in (source_grid.basis, target_grid.basis, mapping):
+            if _traced(matrix) or isinstance(matrix, jax.core.Tracer):
+                continue  # a traced basis keeps the diagonal form it was built with
             matrix = np.asarray(matrix)
             tolerance = 32 * np.finfo(float).eps * np.max(np.abs(matrix))
             if np.any(np.abs(matrix[[0, 1], [1, 0]]) > tolerance):
@@ -689,8 +762,9 @@ def resample(
             (1, source_grid.center_y, target_grid.center_y),
         ):
             ratio = mapping[axis, axis]
+            xp = jnp if traced else np
             positions = (
-                np.arange(target_grid.shape[1 - axis]) - target_center
+                xp.arange(target_grid.shape[1 - axis]) - target_center
             ) * ratio + source_center
             matrix = _band_limited_matrix(
                 source_grid.shape[1 - axis],
@@ -711,39 +785,50 @@ def resample(
             data = data * area_ratio
         return Image.tree_unflatten(metadata, (data,))
     order = {"nearest": 0, "linear": 1, "cubic": 3}[selected]
-    deposit_flux = image.outside == "zero" and integral and area_ratio >= 1.0
-    scale = area_ratio if integral and not deposit_flux else 1.0
-    # Sampling maps target centers into source pixels; deposition maps
-    # source centers into target pixels and applies the kernel's transpose.
-    from_grid, to_grid = (
-        (source_grid, target_grid) if deposit_flux else (target_grid, source_grid)
-    )
-    x, y = from_grid.coordinates()
-    if from_grid.orientation != to_grid.orientation:
-        east, north = from_grid.orientation.detector_to_sky(x, y)
-        x, y = to_grid.orientation.sky_to_detector(east, north)
-    pixels = to_grid.unit_to_pixel(x, y)
 
-    def interpolate(plane):
-        if deposit_flux:
-
-            def sample_target(target):
-                return map_coordinates(target, (pixels.y, pixels.x), order=order)
-
-            _, deposit = jax.vjp(
-                sample_target, jnp.zeros(target_grid.shape, dtype=plane.dtype)
-            )
-            return deposit(plane)[0]
-        return map_coordinates(
-            plane,
-            (pixels.y, pixels.x),
-            order=order,
-            mode="reflect" if image.outside == "reflect" else "constant",
+    def kernel(deposit_flux):
+        scale = area_ratio if integral and not deposit_flux else 1.0
+        # Sampling maps target centers into source pixels; deposition maps
+        # source centers into target pixels and applies the kernel's transpose.
+        from_grid, to_grid = (
+            (source_grid, target_grid) if deposit_flux else (target_grid, source_grid)
         )
+        x, y = from_grid.coordinates()
+        if not _same_orientation(from_grid.orientation, to_grid.orientation):
+            east, north = from_grid.orientation.detector_to_sky(x, y)
+            x, y = to_grid.orientation.sky_to_detector(east, north)
+        pixels = to_grid.unit_to_pixel(x, y)
 
-    for _ in range(data.ndim - 2):
-        interpolate = jax.vmap(interpolate)
-    data = interpolate(data) * scale
+        def interpolate(plane):
+            if deposit_flux:
+
+                def sample_target(target):
+                    return map_coordinates(target, (pixels.y, pixels.x), order=order)
+
+                _, deposit = jax.vjp(
+                    sample_target, jnp.zeros(target_grid.shape, dtype=plane.dtype)
+                )
+                return deposit(plane)[0]
+            return map_coordinates(
+                plane,
+                (pixels.y, pixels.x),
+                order=order,
+                mode="reflect" if image.outside == "reflect" else "constant",
+            )
+
+        for _ in range(data.ndim - 2):
+            interpolate = jax.vmap(interpolate)
+        return interpolate(data) * scale
+
+    if image.outside == "zero" and integral:
+        if traced:
+            # The host cannot compare traced pixel areas: build both forms and
+            # keep the one the areas select.
+            data = jnp.where(area_ratio >= 1.0, kernel(True), kernel(False))
+        else:
+            data = kernel(area_ratio >= 1.0)
+    else:
+        data = kernel(False)
     return Image.tree_unflatten(metadata, (data,))
 
 
