@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.0](https://github.com/CoreySpohn/hwoutils/compare/v1.15.0...v2.0.0) (2026-11-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* add Measure and conservative footprint integration and remove the raw-array rebinning APIs
+* one spectral vocabulary with SpectralBreaks, band-keyed Quadrature and edges-only bands
+* give PixelGrid corners, extent, radius and to_lod, and bin radial profiles on the image grid
+
+### Features
+
+* add Measure and conservative footprint integration and remove the raw-array rebinning APIs ([4594693](https://github.com/CoreySpohn/hwoutils/commit/4594693fd3c6e348bc779c1a0a1b44fc6ee8c7d1))
+* frame coordinate model, point-density images, tabulated transmission, trapezoid weights, photometric helpers and stationary Gaussian fields ([5b3ae4e](https://github.com/CoreySpohn/hwoutils/commit/5b3ae4e8d123dd22796e1766bde3164a84fd192c))
+* give PixelGrid corners, extent, radius and to_lod, and bin radial profiles on the image grid ([5066221](https://github.com/CoreySpohn/hwoutils/commit/506622120f26751b0650f595f01314c032a437a2))
+* images declare their reconstruction and resample gains an exact band-limited mode ([0d980a3](https://github.com/CoreySpohn/hwoutils/commit/0d980a31d9c226379f7c0b3e52241562fd9f3864))
+* images declare what lies outside the array, with an even extension for resampling ([7aa0dfb](https://github.com/CoreySpohn/hwoutils/commit/7aa0dfb2ba98ca37939e97fd3b5165bd0694da11))
+* JAX-free constants, MJD conversions, Planck photon radiance and grid and band owner helpers ([6844a9f](https://github.com/CoreySpohn/hwoutils/commit/6844a9fb1cbbaf3369545aefade0d07c265d0a6d))
+* one spectral vocabulary with SpectralBreaks, band-keyed Quadrature and edges-only bands ([27e58ac](https://github.com/CoreySpohn/hwoutils/commit/27e58ac062f5245e922b99bf02f4070d3ca37f28))
+* publish the internal-references guard as a dependency-free pre-commit script hook ([7ea5d77](https://github.com/CoreySpohn/hwoutils/commit/7ea5d7702932e170cccf0071bfa865754c5ebff1))
+* shared band, quadrature and pixel-grid types with a grid-aware resample ([80b5fca](https://github.com/CoreySpohn/hwoutils/commit/80b5fca8654c35185407bb2e7b070928ddfb1461))
+* shared internal-references guard module, CLI and pytest plugin ([724d965](https://github.com/CoreySpohn/hwoutils/commit/724d965fee79c0aaac26078d8265859609f0a2e5))
+* **spectral:** add rebin_bands on an overlap kernel shared with rebin_flux ([e178067](https://github.com/CoreySpohn/hwoutils/commit/e1780677ab8bcdebcfef12574f844d20c31d5a16))
+* **spectral:** collect declared spectral breakpoints from nested models for knot-split quadrature ([e9348ce](https://github.com/CoreySpohn/hwoutils/commit/e9348cef55e70a4f609831bd5faf5b9d0154811d))
+
+
+### Bug Fixes
+
+* **deps:** require equinox 0.13.2, the first release that imports with jaxlib 0.8 ([c614f7a](https://github.com/CoreySpohn/hwoutils/commit/c614f7a8e4b210e0f6c981b6babf40633c00f2b7))
+* **grids:** restrict band-limited resampling to the source footprint ([fd3916b](https://github.com/CoreySpohn/hwoutils/commit/fd3916b6da23357a1aad1411e96b1a62e12f8254))
+* keep edge pixel centres finite when map_coordinates fills with NaN ([d57c163](https://github.com/CoreySpohn/hwoutils/commit/d57c1631abee81b750a74021565a2d188dd9677a))
+
 ## [1.15.0](https://github.com/CoreySpohn/hwoutils/compare/v1.14.0...v1.15.0) (2026-11-16)
 
 

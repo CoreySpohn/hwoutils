@@ -50,7 +50,7 @@ conserving a global sum alone does not establish correct local photometry.
 
 ## Fourier rotation
 
-`rotate_image(image, rotation_deg, pad_factor=0.5, center=None)` rotates
+`rotate_image(image, rotation_deg, *, pad_factor=0.5, center=None)` rotates
 counter-clockwise when displayed with `origin="lower"`. The default center is
 `((N-1)/2, (N-1)/2)`. FITS optical centers can differ, so pass `center=(row, column)`
 explicitly when rotating around the optical axis.

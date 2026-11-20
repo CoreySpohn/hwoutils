@@ -13,11 +13,11 @@
 
 **hwoutils** is the shared utility foundation for the HWO direct imaging simulation suite. It provides physical constants, unit conversions and a reference epoch that need only NumPy, plus flux-conserving JAX image transforms behind the `jax` extra. It is used across:
 
-- **[yippy](https://github.com/CoreySpohn/yippy)** — Coronagraph performance modeling
-- **[orbix](https://github.com/CoreySpohn/orbix)** — Orbital dynamics and target scheduling
-- **[coronagraphoto](https://github.com/CoreySpohn/coronagraphoto)** — Image simulation for coronagraphic observations
-- **[coronalyze](https://github.com/CoreySpohn/coronalyze)** — Post-processing and SNR analysis
-- **[hwosim](https://github.com/CoreySpohn/hwosim)** — End-to-end mission simulations
+- **[yippy](https://github.com/CoreySpohn/yippy)**: Coronagraph performance modeling
+- **[orbix](https://github.com/CoreySpohn/orbix)**: Orbital dynamics and target scheduling
+- **[coronagraphoto](https://github.com/CoreySpohn/coronagraphoto)**: Image simulation for coronagraphic observations
+- **[coronalyze](https://github.com/CoreySpohn/coronalyze)**: Post-processing and SNR analysis
+- **[spaceodyssey](https://github.com/CoreySpohn/spaceodyssey)**: End-to-end mission simulations
 
 ## Key Features
 
@@ -54,7 +54,7 @@ from hwoutils.transforms import resample_flux
 # Convert 5 arcsec to lambda/D for a 6m telescope at 550nm
 sep_lod = conv.arcsec_to_lambda_d(5.0, 550.0, 6.0)
 
-# Flux-conserving PSF resampling
+# Smooth PSF resampling, scaled by the target pixel area
 resampled = resample_flux(psf, pixscale_src=0.01, pixscale_tgt=0.1, shape_tgt=(64, 64))
 ```
 
