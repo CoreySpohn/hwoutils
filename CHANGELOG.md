@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0](https://github.com/CoreySpohn/hwoutils/compare/v2.0.0...v2.1.0) (2026-11-20)
+
+
+### Miscellaneous Chores
+
+* release 2.1.0 ([314218c](https://github.com/CoreySpohn/hwoutils/commit/314218c18b4358752365f1eb7b9342adcdc618a6))
+
 ## [2.0.0](https://github.com/CoreySpohn/hwoutils/compare/v1.15.0...v2.0.0) (2026-11-19)
 
 
