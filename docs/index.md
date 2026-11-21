@@ -31,6 +31,7 @@ pip install "hwoutils[jax]"   # adds the JAX modules
 ```{toctree}
 :maxdepth: 2
 
+constants_and_conversions
 jax_configuration
 interpolation
 model_paths_and_blocks

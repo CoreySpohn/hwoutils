@@ -6,7 +6,7 @@ Choose the operation according to what the samples mean:
 | --- | --- | --- |
 | `map_coordinates` | Point samples reconstructed with nearest, linear, or Keys cubic interpolation | No pixel integration |
 | `resample_flux` | Surface brightness sampled at target pixel centers, then scaled by target area | Approximate target-pixel flux; not strictly conservative |
-| `integrate_footprints` | Piecewise-constant density on a `PixelGrid` | Sums covered source flux within each target cell |
+| `optixstuff.grids.integrate_footprints` | Piecewise-constant density on an optixstuff `PixelGrid`; it lives in optixstuff | Sums covered source flux within each target cell |
 | `rotate_image` | Periodic Fourier interpolation on a zero-padded grid | Finite-grid, Nyquist, and cropping errors require convergence checks |
 
 ## Keys cubic interpolation
