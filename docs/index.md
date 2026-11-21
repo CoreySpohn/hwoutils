@@ -5,7 +5,7 @@ Shared utilities for the HWO direct imaging simulation suite.
 ## Overview
 
 hwoutils provides common building blocks used across the HWO simulation
-libraries (yippy, orbix, coronagraphoto, coronalyze):
+libraries (yippy, orbix, coronagraphoto, photomancy):
 
 - **JAX configuration** -- helpers to set precision, platform, and device
   count before JAX initializes

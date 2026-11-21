@@ -42,6 +42,10 @@ class TestConstantsValidation:
         assert jnp.isclose(hwo_const.Mearth2kg, astropy_const.M_earth.value, rtol=1e-12)
         assert jnp.isclose(hwo_const.Mjup2kg, astropy_const.M_jup.value, rtol=1e-12)
 
+    def test_solar_gravitational_parameter(self):
+        """Verify GM_SUN_AU3_PER_D2 is G times the solar mass."""
+        assert hwo_const.GM_SUN_AU3_PER_D2 == hwo_const.G * hwo_const.Msun2kg
+
     def test_distances(self):
         """Verify AU, parsec, and Earth and solar radii match astropy."""
         assert jnp.isclose(hwo_const.AU2m, astropy_const.au.value, rtol=1e-12)

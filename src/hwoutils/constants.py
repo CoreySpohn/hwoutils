@@ -1,7 +1,7 @@
 """Physical constants and unit conversion factors.
 
 Single source of truth for all constants used across the HWO simulation suite
-(yippy, orbix, coronagraphoto, coronalyze, hwosim). All values are plain floats
+(yippy, orbix, coronagraphoto, photomancy, hwosim). All values are plain floats
 -- no array-library or astropy.units dependency.
 """
 
@@ -73,6 +73,7 @@ Rsun2AU = Rsun2m * m2AU
 Msun2kg = 1.988409870698051e30
 Mearth2kg = 5.972167867791379e24
 Mjup2kg = 1.8981245973360505e27
+GM_SUN_AU3_PER_D2 = G * Msun2kg  # [AU^3*d^-2] solar gravitational parameter
 
 # ---------------------------------------------------------------------------
 # Angular conversions

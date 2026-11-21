@@ -16,7 +16,7 @@
 - **[yippy](https://github.com/CoreySpohn/yippy)**: Coronagraph performance modeling
 - **[orbix](https://github.com/CoreySpohn/orbix)**: Orbital dynamics and target scheduling
 - **[coronagraphoto](https://github.com/CoreySpohn/coronagraphoto)**: Image simulation for coronagraphic observations
-- **[coronalyze](https://github.com/CoreySpohn/coronalyze)**: Post-processing and SNR analysis
+- **[photomancy](https://github.com/CoreySpohn/photomancy)**: Post-processing, detection statistics and inference
 - **[spaceodyssey](https://github.com/CoreySpohn/spaceodyssey)**: End-to-end mission simulations
 
 ## Key Features
