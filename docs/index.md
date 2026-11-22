@@ -16,6 +16,7 @@ libraries (yippy, orbix, coronagraphoto, photomancy):
   subpixel interpolation via JAX
 - **Array centers** -- the zero-indexed geometric center of an array
 - **Map coordinates** -- B-spline interpolation on regular grids
+- **Size checks** -- estimate, batch or refuse before a large allocation
 - **Model paths and blocks** -- dotted paths into a model, and the contract of a
   free entry that owns a node of a model and writes it from its own coordinates
 
@@ -35,6 +36,7 @@ constants_and_conversions
 jax_configuration
 interpolation
 model_paths_and_blocks
+memory
 testbudget
 internal_refs
 ```
