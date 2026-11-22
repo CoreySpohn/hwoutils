@@ -14,13 +14,21 @@ GB = 1024**3
 
 
 def peak_rss_bytes() -> int:
-    """Return the peak resident size of this process in bytes."""
+    """Return the peak resident size of this process in bytes.
+
+    Returns:
+        Peak resident size [bytes] of this process.
+    """
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return peak if sys.platform == "darwin" else peak * 1024
 
 
 def current_rss_bytes() -> int:
-    """Return the current resident size of this process in bytes."""
+    """Return the current resident size of this process in bytes.
+
+    Returns:
+        Current resident size [bytes] of this process.
+    """
     if psutil is not None:
         return psutil.Process().memory_info().rss
     try:

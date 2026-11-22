@@ -21,6 +21,15 @@ def planck_photon_radiance(wavelength_nm, temperature_k):
     There is no hemispheric pi or observer dilution: multiply by
     pi * (radius_m / distance_m)**2 for an unresolved uniform sphere.
     Multiply by photon energy through hwoutils.conversions for energy units.
+
+    Args:
+        wavelength_nm: Wavelength [nm], positive. Broadcasts against
+            ``temperature_k``.
+        temperature_k: Temperature [K], positive. Broadcasts against
+            ``wavelength_nm``.
+
+    Returns:
+        Photon radiance [photons/s/m^2/nm/sr], with the broadcast shape of the inputs.
     """
     wavelength_um = jnp.asarray(wavelength_nm) * nm2um
     exponent = _EXPONENT_UM_K / (wavelength_um * jnp.asarray(temperature_k))
@@ -37,6 +46,14 @@ def brightness_temperature(wavelength_nm, photon_radiance):
     Convert energy or wavenumber densities through hwoutils.conversions
     first, and divide hemispheric flux by pi. Log-domain arithmetic avoids
     overflow when radiance is very small. Inputs are not clipped.
+
+    Args:
+        wavelength_nm: Wavelength [nm], positive. Broadcasts against
+            ``photon_radiance``.
+        photon_radiance: Photon radiance [photons/s/m^2/nm/sr], nonnegative.
+
+    Returns:
+        Brightness temperature [K], with the broadcast shape of the inputs.
     """
     wavelength_um = jnp.asarray(wavelength_nm) * nm2um
     log_ratio = (

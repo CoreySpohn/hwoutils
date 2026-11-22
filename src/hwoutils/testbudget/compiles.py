@@ -84,12 +84,20 @@ def install() -> None:
 
 
 def compile_count() -> int:
-    """Return the number of XLA programs compiled, excluding cache loads."""
+    """Return the number of XLA programs compiled, excluding cache loads.
+
+    Returns:
+        Count of real XLA compiles since the listeners were installed.
+    """
     return _count
 
 
 def compile_seconds() -> float:
-    """Return the backend compile time in seconds, excluding cache loads."""
+    """Return the backend compile time in seconds, excluding cache loads.
+
+    Returns:
+        Total backend compile time [s] since the listeners were installed.
+    """
     return _seconds
 
 
@@ -98,5 +106,8 @@ def cache_hit_count() -> int:
 
     A load is counted when its duration event closes it, the same moment a real
     compile is counted, so both fall in the same test and module.
+
+    Returns:
+        Count of programs loaded from the persistent cache.
     """
     return _cache_hits

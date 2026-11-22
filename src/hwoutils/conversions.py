@@ -40,12 +40,28 @@ def photons_per_nm_per_m2_to_jy(flux_phot, wavelength_nm):
 
 
 def photons_per_nm_per_m2_to_w_per_nm_per_m2(flux_phot, wavelength_nm):
-    """Convert photons/s/nm/m^2 to W/nm/m^2, retaining any per-sr factor."""
+    """Convert photons/s/nm/m^2 to W/nm/m^2, retaining any per-sr factor.
+
+    Args:
+        flux_phot: Flux density [photons/s/nm/m^2], or per sr if a per-sr density.
+        wavelength_nm: Wavelength [nm], broadcast against ``flux_phot``.
+
+    Returns:
+        Flux density [W/nm/m^2], with the same per-sr factor as the input.
+    """
     return flux_phot * (const.h * const.c / const.nm2m) / wavelength_nm
 
 
 def w_per_nm_per_m2_to_photons_per_nm_per_m2(flux_w, wavelength_nm):
-    """Convert W/nm/m^2 to photons/s/nm/m^2, retaining any per-sr factor."""
+    """Convert W/nm/m^2 to photons/s/nm/m^2, retaining any per-sr factor.
+
+    Args:
+        flux_w: Flux density [W/nm/m^2], or per sr if a per-sr density.
+        wavelength_nm: Wavelength [nm], broadcast against ``flux_w``.
+
+    Returns:
+        Flux density [photons/s/nm/m^2], with the same per-sr factor as the input.
+    """
     return flux_w * wavelength_nm / (const.h * const.c / const.nm2m)
 
 
@@ -54,22 +70,51 @@ def w_per_nm_per_m2_to_cgs_per_wavenumber(flux_w, wavelength_nm):
 
     Apply ``|d(lambda_nm)/d(nu_cm)| = lambda_nm^2 / cm2nm``.
     This changes the density coordinate only, with no solid-angle integral.
+
+    Args:
+        flux_w: Flux density [W/m^2/nm], or per sr if a per-sr density.
+        wavelength_nm: Wavelength [nm], broadcast against ``flux_w``.
+
+    Returns:
+        Flux density [erg/s/cm^2/(cm^-1)], with the same per-sr factor as the input.
     """
     return flux_w * (const.J2erg * const.cm22m2 / const.cm2nm) * wavelength_nm**2
 
 
 def cgs_per_wavenumber_to_w_per_nm_per_m2(flux_cgs, wavelength_nm):
-    """Convert erg/s/cm^2/(cm^-1) to W/m^2/nm, retaining any per-sr factor."""
+    """Convert erg/s/cm^2/(cm^-1) to W/m^2/nm, retaining any per-sr factor.
+
+    Args:
+        flux_cgs: Flux density [erg/s/cm^2/(cm^-1)], or per sr if a per-sr density.
+        wavelength_nm: Wavelength [nm], broadcast against ``flux_cgs``.
+
+    Returns:
+        Flux density [W/m^2/nm], with the same per-sr factor as the input.
+    """
     return flux_cgs / wavelength_nm**2 / (const.J2erg * const.cm22m2 / const.cm2nm)
 
 
 def mag_to_flux_jy(mag):
-    """AB magnitude to flux density in Jansky."""
+    """AB magnitude to flux density in Jansky.
+
+    Args:
+        mag: AB magnitude.
+
+    Returns:
+        Flux density [Jy].
+    """
     return AB_ZERO_POINT_JY * 10.0 ** (-0.4 * mag)
 
 
 def flux_jy_to_mag(flux_jy):
-    """Flux density in Jansky to AB magnitude."""
+    """Flux density in Jansky to AB magnitude.
+
+    Args:
+        flux_jy: Flux density [Jy], positive.
+
+    Returns:
+        AB magnitude, a JAX array.
+    """
     import jax.numpy as jnp
 
     return -2.5 * jnp.log10(flux_jy / AB_ZERO_POINT_JY)
@@ -80,6 +125,12 @@ def contrast_to_delta_mag(contrast):
 
     Zero gives +inf and negative ratios give NaN, without clipping. Callers
     requiring a finite floor must apply it explicitly. JAX loads on first call.
+
+    Args:
+        contrast: Flux ratio F / F_ref, dimensionless.
+
+    Returns:
+        Magnitude difference m - m_ref, a JAX array.
     """
     import jax.numpy as jnp
 
@@ -87,7 +138,14 @@ def contrast_to_delta_mag(contrast):
 
 
 def delta_mag_to_contrast(delta_mag):
-    """Convert m - m_ref to the flux ratio F / F_ref in the same band."""
+    """Convert m - m_ref to the flux ratio F / F_ref in the same band.
+
+    Args:
+        delta_mag: Magnitude difference m - m_ref.
+
+    Returns:
+        Flux ratio F / F_ref, dimensionless.
+    """
     return 10.0 ** (-0.4 * delta_mag)
 
 
@@ -146,12 +204,26 @@ def mjy_per_sr_to_jy(surface_brightness, solid_angle_sr):
 
 
 def nm_to_um(length_nm):
-    """Convert nanometers to micrometers."""
+    """Convert nanometers to micrometers.
+
+    Args:
+        length_nm: Length [nm].
+
+    Returns:
+        Length [um].
+    """
     return length_nm * const.nm2um
 
 
 def um_to_nm(length_um):
-    """Convert micrometers to nanometers."""
+    """Convert micrometers to nanometers.
+
+    Args:
+        length_um: Length [um].
+
+    Returns:
+        Length [nm].
+    """
     return length_um * const.um2nm
 
 
@@ -180,17 +252,38 @@ def wavenumber_cm_to_nm(wavenumber_cm):
 
 
 def au_to_m(length_au):
-    """Convert AU to meters."""
+    """Convert AU to meters.
+
+    Args:
+        length_au: Length [AU].
+
+    Returns:
+        Length [m].
+    """
     return length_au * const.AU2m
 
 
 def m_to_au(length_m):
-    """Convert meters to AU."""
+    """Convert meters to AU.
+
+    Args:
+        length_m: Length [m].
+
+    Returns:
+        Length [AU].
+    """
     return length_m * const.m2AU
 
 
 def Rearth_to_m(length_Rearth):
-    """Convert Earth radii to meters."""
+    """Convert Earth radii to meters.
+
+    Args:
+        length_Rearth: Length [Earth radii].
+
+    Returns:
+        Length [m].
+    """
     return length_Rearth * const.Rearth2m
 
 
@@ -200,7 +293,14 @@ def Rearth_to_m(length_Rearth):
 
 
 def au_per_yr_to_m_per_s(velocity_au_per_yr):
-    """Convert AU/yr to m/s."""
+    """Convert AU/yr to m/s.
+
+    Args:
+        velocity_au_per_yr: Velocity [AU/yr].
+
+    Returns:
+        Velocity [m/s].
+    """
     return velocity_au_per_yr * const.AU2m / const.yr2s
 
 
@@ -210,22 +310,50 @@ def au_per_yr_to_m_per_s(velocity_au_per_yr):
 
 
 def arcsec_to_rad(angle_arcsec):
-    """Convert arcseconds to radians."""
+    """Convert arcseconds to radians.
+
+    Args:
+        angle_arcsec: Angle [arcsec].
+
+    Returns:
+        Angle [rad].
+    """
     return angle_arcsec * const.arcsec2rad
 
 
 def rad_to_arcsec(angle_rad):
-    """Convert radians to arcseconds."""
+    """Convert radians to arcseconds.
+
+    Args:
+        angle_rad: Angle [rad].
+
+    Returns:
+        Angle [arcsec].
+    """
     return angle_rad * const.rad2arcsec
 
 
 def mas_to_arcsec(angle_mas):
-    """Convert milliarcseconds to arcseconds."""
+    """Convert milliarcseconds to arcseconds.
+
+    Args:
+        angle_mas: Angle [mas].
+
+    Returns:
+        Angle [arcsec].
+    """
     return angle_mas * const.mas2arcsec
 
 
 def arcsec_to_mas(angle_arcsec):
-    """Convert arcseconds to milliarcseconds."""
+    """Convert arcseconds to milliarcseconds.
+
+    Args:
+        angle_arcsec: Angle [arcsec].
+
+    Returns:
+        Angle [mas].
+    """
     return angle_arcsec * const.arcsec2mas
 
 
@@ -234,12 +362,27 @@ def angular_diameter_arcsec(radius_m, distance_pc):
 
     Inputs broadcast through ordinary arithmetic; radius may be zero and
     distance must be positive. No finite-distance arcsine correction is used.
+
+    Args:
+        radius_m: Physical radius [m], zero or positive.
+        distance_pc: Distance [pc], positive.
+
+    Returns:
+        Angular diameter [arcsec].
     """
     return rad_to_arcsec(2.0 * radius_m / (distance_pc * const.pc2m))
 
 
 def angular_diameter_mas(radius_m, distance_pc):
-    """Small-angle diameter 2 R / d in mas, for radius [m], distance [pc]."""
+    """Small-angle diameter 2 R / d in mas, for radius [m], distance [pc].
+
+    Args:
+        radius_m: Physical radius [m], zero or positive.
+        distance_pc: Distance [pc], positive.
+
+    Returns:
+        Angular diameter [mas].
+    """
     return arcsec_to_mas(angular_diameter_arcsec(radius_m, distance_pc))
 
 
@@ -283,12 +426,26 @@ def lambda_d_to_arcsec(angle_lambda_d, wavelength_nm, diameter_m):
 
 
 def Msun_to_kg(mass_solar):
-    """Convert solar masses to kilograms."""
+    """Convert solar masses to kilograms.
+
+    Args:
+        mass_solar: Mass [solar masses].
+
+    Returns:
+        Mass [kg].
+    """
     return mass_solar * const.Msun2kg
 
 
 def Mearth_to_kg(mass_earth):
-    """Convert Earth masses to kilograms."""
+    """Convert Earth masses to kilograms.
+
+    Args:
+        mass_earth: Mass [Earth masses].
+
+    Returns:
+        Mass [kg].
+    """
     return mass_earth * const.Mearth2kg
 
 
@@ -333,22 +490,49 @@ def jd_to_mjd(time_jd):
 
     Inputs are scalars or arrays; absolute dates need float64 for sub-day
     precision. For two-part dates use Epoch.days with Epoch(MJD_ZERO_JD).
+
+    Args:
+        time_jd: Julian date [d].
+
+    Returns:
+        Modified Julian date [d], on the same time scale.
     """
     return time_jd - const.MJD_ZERO_JD
 
 
 def mjd_to_jd(time_mjd):
-    """Convert Modified Julian Date to Julian Date without changing time scale."""
+    """Convert Modified Julian Date to Julian Date without changing time scale.
+
+    Args:
+        time_mjd: Modified Julian date [d].
+
+    Returns:
+        Julian date [d], on the same time scale.
+    """
     return time_mjd + const.MJD_ZERO_JD
 
 
 def years_to_days(time_years):
-    """Convert years to days."""
+    """Convert years to days.
+
+    Args:
+        time_years: Duration [yr], Julian years of 365.25 d.
+
+    Returns:
+        Duration [d].
+    """
     return time_years * 365.25
 
 
 def days_to_years(time_days):
-    """Convert days to years."""
+    """Convert days to years.
+
+    Args:
+        time_days: Duration [d].
+
+    Returns:
+        Duration [yr], Julian years of 365.25 d.
+    """
     return time_days / 365.25
 
 
@@ -483,5 +667,11 @@ def geometric_to_spherical_albedo(A_g):
 
     Inverse of :func:`spherical_to_geometric_albedo`:
     A_S = (3/2) * A_g.
+
+    Args:
+        A_g: Geometric albedo, dimensionless.
+
+    Returns:
+        Spherical (Bond) albedo A_S, dimensionless.
     """
     return A_g / SPHERICAL_TO_GEOMETRIC_ALBEDO_LAMBERTIAN

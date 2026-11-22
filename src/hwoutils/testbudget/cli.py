@@ -9,7 +9,15 @@ from hwoutils.testbudget.trend import format_trend, growth_flags, read_records
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Print the trend for a library; exit 1 if any metric grew over 20 percent."""
+    """Print the trend for a library; exit 1 if any metric grew over 20 percent.
+
+    Args:
+        argv: Command line arguments. Defaults to ``sys.argv[1:]``.
+
+    Returns:
+        Exit status: 0 for no growth flags, 1 when any metric is flagged, 2 when no
+        trend file exists.
+    """
     parser = argparse.ArgumentParser(prog="testbudget", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     trend = sub.add_parser("trend", help="print recent runs and flag growth")

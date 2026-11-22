@@ -80,28 +80,57 @@ class BudgetConfig:
     trend_file: str = ""
 
     def tier_budget_s(self, tier: str) -> float:
-        """Return the call-time budget for a tier name."""
+        """Return the call-time budget for a tier name.
+
+        Args:
+            tier: Tier name: ``unit``, ``medium`` or ``slow``.
+
+        Returns:
+            Call-time budget [s] of the tier.
+        """
         return {"unit": self.unit_s, "medium": self.medium_s, "slow": self.slow_s}[tier]
 
     def module_enforced(self) -> bool:
-        """Return whether module compile budgets fail the session."""
+        """Return whether module compile budgets fail the session.
+
+        Returns:
+            True when the module compile budgets are in ``enforce`` mode.
+        """
         return (self.module_mode or self.mode) == "enforce"
 
     def ceiling_gb(self, tier: str) -> float:
-        """Return the resident-size ceiling that applies while a tier runs."""
+        """Return the resident-size ceiling that applies while a tier runs.
+
+        Args:
+            tier: Tier name: ``unit``, ``medium`` or ``slow``.
+
+        Returns:
+            Resident-size ceiling [GB] while the tier runs; zero means no ceiling.
+        """
         if tier == "slow" and self.slow_rss_ceiling_gb > 0:
             return self.slow_rss_ceiling_gb
         return self.rss_ceiling_gb
 
     def resolved_trend_file(self) -> Path:
-        """Return the trend file path after the environment override."""
+        """Return the trend file path after the environment override.
+
+        Returns:
+            Trend file path with the user directory expanded.
+        """
         override = os.environ.get("TESTBUDGET_TREND_FILE") or self.trend_file
         if override:
             return Path(override).expanduser()
         return Path("~/hwo-data/testbudget").expanduser() / f"{self.library}.jsonl"
 
     def resolved_cache_dir(self, root: Path) -> Path:
-        """Return the compilation cache directory after the environment override."""
+        """Return the compilation cache directory after the environment override.
+
+        Args:
+            root: Project root against which a relative cache directory resolves.
+
+        Returns:
+            Absolute or root-relative compilation cache directory.
+        """
         override = os.environ.get("TESTBUDGET_CACHE_DIR") or self.compile_cache_dir
         path = Path(override).expanduser()
         return path if path.is_absolute() else root / path
@@ -112,6 +141,12 @@ def load_config(root: Path) -> BudgetConfig:
 
     Unknown keys and a bad mode raise ``ValueError`` so a typo does not
     silently leave a budget at its default.
+
+    Args:
+        root: Project root holding ``pyproject.toml``.
+
+    Returns:
+        The configuration, with defaults where the file or table is missing.
     """
     pyproject = Path(root) / "pyproject.toml"
     data = {}

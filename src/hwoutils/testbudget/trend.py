@@ -11,7 +11,14 @@ WINDOW = 10
 
 
 def git_sha(root: Path) -> str:
-    """Return the short commit hash of ``root``, or an empty string."""
+    """Return the short commit hash of ``root``, or an empty string.
+
+    Args:
+        root: Directory inside a Git repository.
+
+    Returns:
+        Short commit hash of ``HEAD``, or an empty string when Git fails.
+    """
     try:
         out = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
@@ -26,14 +33,26 @@ def git_sha(root: Path) -> str:
 
 
 def append_record(path: Path, record: dict) -> None:
-    """Append one record to the JSONL trend file, creating its directory."""
+    """Append one record to the JSONL trend file, creating its directory.
+
+    Args:
+        path: Trend file path (JSON lines).
+        record: JSON-serializable summary of one pytest session.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 def read_records(path: Path) -> list[dict]:
-    """Read every record, skipping blank or damaged lines."""
+    """Read every record, skipping blank or damaged lines.
+
+    Args:
+        path: Trend file path (JSON lines).
+
+    Returns:
+        One dict per valid line, oldest first.
+    """
     records = []
     for line in Path(path).read_text().splitlines():
         try:
@@ -49,6 +68,14 @@ def growth_flags(records: list[dict], window: int = WINDOW) -> dict[str, float]:
     Only runs with the same ``args`` as the newest are compared, because a
     one-file run and a full run are not comparable. Needs at least three prior
     runs. Returns metric name -> fractional growth for the flagged metrics.
+
+    Args:
+        records: Trend records, oldest first.
+        window: Maximum number of prior comparable runs in the mean.
+
+    Returns:
+        Mapping from metric name (``wall_s``, ``peak_rss_gb``, ``compiles``, ``tests``)
+        to fractional growth over the prior mean, for the flagged metrics only.
     """
     if not records:
         return {}
@@ -65,7 +92,15 @@ def growth_flags(records: list[dict], window: int = WINDOW) -> dict[str, float]:
 
 
 def format_trend(records: list[dict], last: int = 20) -> str:
-    """Return a table of the most recent runs, then any growth flags."""
+    """Return a table of the most recent runs, then any growth flags.
+
+    Args:
+        records: Trend records, oldest first.
+        last: Number of most recent runs to print.
+
+    Returns:
+        Multi-line text table of the recent runs followed by the growth flags.
+    """
     lines = [
         f"{'time':20} {'sha':8} {'tests':>6} {'wall_s':>8} {'rss_gb':>7} "
         f"{'compiles':>8}  args"

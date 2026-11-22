@@ -28,7 +28,11 @@ TOP_N = 5
 
 
 def pytest_addoption(parser):
-    """Add the command line switches."""
+    """Add the command line switches.
+
+    Args:
+        parser: The pytest option parser.
+    """
     group = parser.getgroup("testbudget")
     group.addoption(
         "--testbudget-mode",
@@ -52,7 +56,14 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
-    """Create the guard, register markers and start the watchdog."""
+    """Create the guard, register markers and start the watchdog.
+
+    Args:
+        config: The pytest configuration object.
+
+    Returns:
+        None.
+    """
     config.addinivalue_line(
         "markers", "medium(reason): integration test, 30 s default budget"
     )
@@ -73,7 +84,11 @@ def pytest_configure(config):
 
 
 def pytest_unconfigure(config):
-    """Stop the watchdog."""
+    """Stop the watchdog.
+
+    Args:
+        config: The pytest configuration object.
+    """
     guard = config.pluginmanager.get_plugin("testbudget-guard")
     if guard is not None:
         guard.stop()
@@ -124,6 +139,16 @@ def module_budget_messages(
 
     Under xdist the controller calls this with totals summed over workers, so a
     module split across workers is judged on its whole cost.
+
+    Args:
+        cfg: The budget configuration.
+        name: Test module node id.
+        used: Number of real compiles in the module.
+        used_s: Seconds spent in real compiles in the module [s].
+        loads: Number of programs loaded from the persistent cache.
+
+    Returns:
+        One message per violated budget; empty when both budgets hold.
     """
     messages = []
     base = Path(name).name
@@ -223,6 +248,12 @@ def fixture_charges(records: list[dict], instances: dict) -> None:
     also used every instance set up inside its setup. An instance set up inside a
     call phase carries no charge, because its time is already in that call.
     The cost of a test is its call time plus its shares.
+
+    Args:
+        records: Per-test records, updated in place with ``setup_share_s``, ``cost_s``
+            and ``heaviest_fixture``.
+        instances: Fixture instances by serial number, each with ``name``, ``setup_s``
+            [s] and ``inside``.
     """
     for rec in records:
         keys, todo = set(), list(rec.get("fixtures", ()))
@@ -256,7 +287,11 @@ class BudgetGuard:
     """Per-session state: measurements, violations, watchdog and ledger."""
 
     def __init__(self, config):
-        """Read the project configuration and set up empty session state."""
+        """Read the project configuration and set up empty session state.
+
+        Args:
+            config: The pytest configuration object.
+        """
         self.config = config
         self.root = Path(config.rootpath)
         self.cfg = load_config(self.root)
@@ -336,7 +371,11 @@ class BudgetGuard:
         sys.stderr.flush()
 
     def check_ceiling(self, item) -> None:
-        """Stop the session between tests if resident memory is over the ceiling."""
+        """Stop the session between tests if resident memory is over the ceiling.
+
+        Args:
+            item: The pytest test item just run.
+        """
         ceiling = self.cfg.ceiling_gb(_tier(item))
         rss = current_rss_bytes()
         if ceiling > 0 and rss > ceiling * GB:
@@ -349,7 +388,15 @@ class BudgetGuard:
 
     @pytest.hookimpl(wrapper=True)
     def pytest_runtest_protocol(self, item, nextitem):
-        """Measure resident-memory growth across setup, call and teardown."""
+        """Measure resident-memory growth across setup, call and teardown.
+
+        Args:
+            item: The pytest test item.
+            nextitem: The next item to run, or ``None``.
+
+        Returns:
+            The result of the wrapped protocol.
+        """
         self.current_tier = _tier(item)
         self.current_test = item.nodeid
         compiles.reset_pending()
@@ -375,6 +422,13 @@ class BudgetGuard:
         linked to this instance, and every test that uses this instance also
         uses the linked ones, because a later test reuses the cached value
         without resolving them again.
+
+        Args:
+            fixturedef: The fixture definition being set up.
+            request: The pytest fixture request.
+
+        Returns:
+            The fixture value from the wrapped setup.
         """
         if not self.cfg.charge_fixture_setup:
             return (yield)
@@ -409,7 +463,14 @@ class BudgetGuard:
 
     @pytest.hookimpl(wrapper=True)
     def pytest_runtest_call(self, item):
-        """Count compiles that happen during the call phase."""
+        """Count compiles that happen during the call phase.
+
+        Args:
+            item: The pytest test item.
+
+        Returns:
+            The result of the wrapped call.
+        """
         before = compiles.compile_count()
         before_s = compiles.compile_seconds()
         self._in_call = True
@@ -432,7 +493,15 @@ class BudgetGuard:
 
     @pytest.hookimpl(wrapper=True)
     def pytest_runtest_makereport(self, item, call):
-        """Apply the time and compile budgets to the call report."""
+        """Apply the time and compile budgets to the call report.
+
+        Args:
+            item: The pytest test item.
+            call: The pytest call information.
+
+        Returns:
+            The test report, with budget problems added to a passing call report.
+        """
         report = yield
         if call.when != "call":
             return report
@@ -506,7 +575,13 @@ class BudgetGuard:
             )
 
     def summary(self) -> dict:
-        """Return the merged session summary, including worker results under xdist."""
+        """Return the merged session summary, including worker results under xdist.
+
+        Returns:
+            Session summary with per-test records, tier counts, violations, compile
+            counts, peak resident size [bytes] and wall time [s], merged across xdist
+            workers.
+        """
         records = list(self.records)
         peak = peak_rss_bytes()
         n_compiles = compiles.compile_count() - self._base_compiles
@@ -553,13 +628,25 @@ class BudgetGuard:
 
     @pytest.hookimpl(optionalhook=True)
     def pytest_testnodedown(self, node, error):
-        """Collect a finished xdist worker's summary on the controller."""
+        """Collect a finished xdist worker's summary on the controller.
+
+        Args:
+            node: The finished xdist worker node.
+            error: Error raised by the worker, if any.
+        """
         out = getattr(node, "workeroutput", {}).get("testbudget")
         if out:
             self.worker_summaries.append(out)
 
     def pytest_sessionfinish(self, session):
-        """Hand worker data to the controller, or write the trend line."""
+        """Hand worker data to the controller, or write the trend line.
+
+        Args:
+            session: The pytest session.
+
+        Returns:
+            None.
+        """
         self.judge_fixture_charges()
         if hasattr(self.config, "workerinput"):
             self.config.workeroutput["testbudget"] = {
@@ -652,7 +739,14 @@ class BudgetGuard:
             sys.stderr.write(f"testbudget: could not write {path}: {err}\n")
 
     def pytest_terminal_summary(self, terminalreporter):
-        """Print the budget summary after the test results."""
+        """Print the budget summary after the test results.
+
+        Args:
+            terminalreporter: The pytest terminal reporter.
+
+        Returns:
+            None.
+        """
         if hasattr(self.config, "workerinput") or not hasattr(self, "final"):
             return
         final = self.final

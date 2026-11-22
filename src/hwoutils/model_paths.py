@@ -70,6 +70,13 @@ def paths_overlap(a: str, b: str) -> bool:
     The empty path (the model) overlaps every path.
     ``"dynamics.orbits"`` overlaps ``"dynamics.orbits"`` and ``"dynamics.orbits[0].ex"``
     but not ``"dynamics.orbits_extra"``.
+
+    Args:
+        a: First model path.
+        b: Second model path.
+
+    Returns:
+        True when the paths are equal or one contains the other.
     """
     short, long = sorted((a, b), key=len)
     if not short:
@@ -83,6 +90,14 @@ def join(prefix: str, path: str) -> str:
     ``join("", "star.mass")`` is ``"star.mass"``, ``join("scene", "")`` is ``"scene"``,
     ``join("planets", "[1].mass")`` is ``"planets[1].mass"`` and
     ``join("scene", "star.mass")`` is ``"scene.star.mass"``.
+
+    Args:
+        prefix: Leading model path, possibly empty.
+        path: Model path appended to ``prefix``, possibly empty or starting with an
+            index such as ``"[1]"``.
+
+    Returns:
+        The joined model path.
     """
     if not prefix:
         return path

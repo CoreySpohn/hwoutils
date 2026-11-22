@@ -50,10 +50,6 @@ class AbstractBlock(eqx.Module):
         reads: Model paths read besides the owned node.
         writes: Model paths written, ``owns`` first.
         coordinate_names: Names of the coordinates, the keys of ``x``.
-        periods: Static tuple aligned with ``coordinate_names``: the period of each
-            coordinate, or ``None`` for a non-periodic one. All ``None`` by default.
-        unit_size: Number of unit-cube coordinates :meth:`from_unit` consumes, or
-            ``None`` when the block has no such map.
     """
 
     owns: eqx.AbstractVar[str]
@@ -63,17 +59,31 @@ class AbstractBlock(eqx.Module):
 
     @property
     def periods(self) -> tuple[float | None, ...]:
-        """Period of each coordinate in ``coordinate_names`` order, ``None`` if none."""
+        """Period of each coordinate in ``coordinate_names`` order, ``None`` if none.
+
+        All ``None`` by default.
+        """
         return (None,) * len(self.coordinate_names)
 
     @property
     def unit_size(self) -> int | None:
-        """Length of the unit-cube vector of :meth:`from_unit`; ``None`` if absent."""
+        """Length of the unit-cube vector of :meth:`from_unit`; ``None`` if absent.
+
+        The number of unit-cube coordinates :meth:`from_unit` consumes.
+        """
         return None
 
     @abstractmethod
     def forward(self, x: dict[str, ArrayLike], model) -> dict[str, object]:
-        """Return ``{path: value}`` for every path in ``writes``."""
+        """Return ``{path: value}`` for every path in ``writes``.
+
+        Args:
+            x: Coordinates, one scalar array per name in ``coordinate_names``.
+            model: The model whose paths the block reads.
+
+        Returns:
+            Mapping from each written model path to the value the block sets.
+        """
 
     @abstractmethod
     def inverse(self, model) -> dict[str, Array]:
@@ -83,6 +93,13 @@ class AbstractBlock(eqx.Module):
         entry is NaN. A value outside by no more than rounding is held at the
         boundary; one outside by more is never clipped onto it. NaN propagates through
         every consumer, so a host marks the draw dead with ``isfinite``.
+
+        Args:
+            model: The model holding the owned node to invert.
+
+        Returns:
+            Mapping from coordinate name to a scalar array, in the units of the
+            coordinate.
         """
 
     @abstractmethod
@@ -91,11 +108,26 @@ class AbstractBlock(eqx.Module):
 
         The density is normalized given the values the block reads from ``model``;
         the volume of the coordinate map, any gauge and every constant are inside.
+
+        Args:
+            x: Coordinates, one scalar array per name in ``coordinate_names``.
+            model: The model whose paths the block reads.
+
+        Returns:
+            Scalar natural-log density, ``-inf`` where the density is zero.
         """
 
     @abstractmethod
     def sample(self, key, model) -> dict[str, Array]:
-        """Return one draw of coordinates from the density of :meth:`log_prob`."""
+        """Return one draw of coordinates from the density of :meth:`log_prob`.
+
+        Args:
+            key: JAX PRNG key for the draw.
+            model: The model whose paths the block reads.
+
+        Returns:
+            Mapping from coordinate name to a scalar array.
+        """
 
     def from_unit(self, c: ArrayLike, model) -> dict[str, Array]:
         """Map a point ``c`` of the unit cube to coordinates, deterministically.
@@ -104,6 +136,13 @@ class AbstractBlock(eqx.Module):
         piecewise continuous and preserves locality (nearby points of the cube go to
         nearby coordinates except across a seam), and uniform ``c`` gives coordinates
         with the density of :meth:`log_prob`, the law of :meth:`sample`.
+
+        Args:
+            c: Point of the unit cube, shape ``(unit_size,)``.
+            model: The model whose paths the block reads.
+
+        Returns:
+            Mapping from coordinate name to a scalar array.
 
         Raises:
             NotImplementedError: For a block with no unit-cube map (``unit_size`` is
@@ -119,6 +158,12 @@ class AbstractBlock(eqx.Module):
         rows (whatever the concrete block's coordinates are made of), so that
         ``other`` can replace this block in a fit. The law, and any bound it
         carries, is not compared. Evaluated on the host.
+
+        Args:
+            other: The block to compare with.
+
+        Returns:
+            True when the layouts match.
         """
 
     @abstractmethod
@@ -128,6 +173,12 @@ class AbstractBlock(eqx.Module):
         True when swapping ``other`` in changes the density and nothing else, so
         coordinates drawn for this block stay valid for ``other``. False when that
         cannot be decided statically (a traced bound). Evaluated on the host.
+
+        Args:
+            other: The block to compare with.
+
+        Returns:
+            True when the layouts match and the mapped support is the same.
         """
 
 
@@ -138,6 +189,10 @@ def check_writers(
 
     ``blocks`` maps each block's key to the block and ``leaf_paths`` are the paths of
     free leaf laws.
+
+    Args:
+        blocks: Mapping from block key to block.
+        leaf_paths: Model paths written by free leaf laws.
 
     Raises:
         ValueError: Naming the path and both writers when a block's key is not its
@@ -164,6 +219,13 @@ def block_order(blocks: Mapping[str, AbstractBlock]) -> tuple[str, ...]:
     """Keys ordered so each block runs after the blocks that write what it reads.
 
     The order is stable (ties keep the mapping's order).
+
+    Args:
+        blocks: Mapping from block key to block.
+
+    Returns:
+        The keys of ``blocks`` in an order where every writer of a path comes before
+        the blocks that read it.
 
     Raises:
         ValueError: If the blocks read each other's writes in a cycle.

@@ -115,3 +115,16 @@ include = ["src/hwoutils"]
 [tool.codespell]
 # "lod" is the lambda/D grid unit name.
 ignore-words-list = "lod"
+
+[tool.pydoclint]
+style = "google"
+arg-type-hints-in-signature = false
+arg-type-hints-in-docstring = false
+check-return-types = false
+check-yield-types = false
+skip-checking-short-docstrings = false
+skip-checking-private-functions = true
+skip-checking-raises = true
+allow-init-docstring = true
+check-class-attributes = true
+baseline = ".pydoclint-baseline.txt"

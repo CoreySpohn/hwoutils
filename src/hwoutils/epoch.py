@@ -60,6 +60,13 @@ class Epoch:
         exposing ``jd1`` and ``jd2`` (for example ``astropy.time.Time``),
         which keeps sub-day precision. An object with a ``scale`` attribute
         that differs from the epoch's raises ``ValueError``.
+
+        Args:
+            time_jd: Julian date [d] as a number or array, or an object with ``jd1``
+                and ``jd2`` [d] attributes.
+
+        Returns:
+            Offset from the epoch [d], float64, with the shape of ``time_jd``.
         """
         self._check_scale(time_jd)
         if hasattr(time_jd, "jd1") and hasattr(time_jd, "jd2"):
@@ -69,20 +76,48 @@ class Epoch:
         return (np.asarray(time_jd, dtype=np.float64) - self.jd1) - self.jd2
 
     def jd(self, time_d) -> np.ndarray:
-        """Julian date of an offset in days, NumPy float64 on the host."""
+        """Julian date of an offset in days, NumPy float64 on the host.
+
+        Args:
+            time_d: Offset from the epoch [d], scalar or array.
+
+        Returns:
+            Julian date [d], float64, with the shape of ``time_d``.
+        """
         return (np.asarray(time_d, dtype=np.float64) + self.jd2) + self.jd1
 
     def days_between(self, other: Epoch) -> float:
-        """Days from ``other`` to this epoch, so ``t_other = t_self + result``."""
+        """Days from ``other`` to this epoch, so ``t_other = t_self + result``.
+
+        Args:
+            other: The epoch to measure from. Its scale must match this epoch's.
+
+        Returns:
+            Difference between the two epochs [d].
+        """
         self._check_scale(other)
         return (self.jd1 - other.jd1) + (self.jd2 - other.jd2)
 
 
 def days_to_seconds(time_d):
-    """Convert an offset in days to seconds (works on traced arrays)."""
+    """Convert an offset in days to seconds (works on traced arrays).
+
+    Args:
+        time_d: Offset [d].
+
+    Returns:
+        The offset [s].
+    """
     return time_d * d2s
 
 
 def seconds_to_days(time_s):
-    """Convert an offset in seconds to days (works on traced arrays)."""
+    """Convert an offset in seconds to days (works on traced arrays).
+
+    Args:
+        time_s: Offset [s].
+
+    Returns:
+        The offset [d].
+    """
     return time_s / d2s

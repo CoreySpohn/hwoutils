@@ -21,7 +21,17 @@ __all__ = [
 
 
 def __getattr__(name):
-    """Load the JAX configuration helpers only when requested."""
+    """Load the JAX configuration helpers only when requested.
+
+    Args:
+        name: Attribute name looked up on the package.
+
+    Returns:
+        The requested helper from ``hwoutils.jax_config``.
+
+    Raises:
+        AttributeError: If ``name`` is not a lazy public export.
+    """
     if name in __all__ and name != "__version__":
         value = getattr(_import_module("hwoutils.jax_config"), name)
         globals()[name] = value
@@ -30,5 +40,9 @@ def __getattr__(name):
 
 
 def __dir__():
-    """Include lazy public exports in interactive discovery."""
+    """Include lazy public exports in interactive discovery.
+
+    Returns:
+        Sorted names of the module globals and the lazy public exports.
+    """
     return sorted(set(globals()) | set(__all__))

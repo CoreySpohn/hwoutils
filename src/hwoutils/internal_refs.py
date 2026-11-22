@@ -42,7 +42,16 @@ TEXT_SUFFIXES = {
 
 
 def scan_file(path):
-    """Return (lineno, pattern, stripped line) hits for one UTF-8 text file."""
+    """Return (lineno, pattern, stripped line) hits for one UTF-8 text file.
+
+    Args:
+        path: Path of the file to scan.
+
+    Returns:
+        One ``(lineno, pattern, line)`` tuple per matching pattern and line, with a
+        one-based line number. An unreadable file gives one ``(0, "<unreadable>",
+        "")`` entry.
+    """
     path = Path(path)
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
@@ -59,7 +68,14 @@ def scan_file(path):
 
 
 def scan(paths):
-    """Return (path, lineno, pattern, line) hits across the supplied files."""
+    """Return (path, lineno, pattern, line) hits across the supplied files.
+
+    Args:
+        paths: Paths of the files to scan.
+
+    Returns:
+        One ``(path, lineno, pattern, line)`` tuple per hit.
+    """
     return [
         (Path(path), lineno, pattern, line)
         for path in paths
@@ -68,7 +84,14 @@ def scan(paths):
 
 
 def tracked_text_files(repo):
-    """List existing tracked text files in a Git repository, except CHANGELOG.md."""
+    """List existing tracked text files in a Git repository, except CHANGELOG.md.
+
+    Args:
+        repo: Root directory of the Git repository.
+
+    Returns:
+        Paths of the tracked files whose suffix is a scanned text suffix.
+    """
     repo = Path(repo)
     tracked = subprocess.run(
         ["git", "-C", str(repo), "ls-files", "-z"],
@@ -99,7 +122,15 @@ def _format_hits(hits):
 
 
 def main(argv=None):
-    """Report hits and return 1 on failure, or return 0 for clean files."""
+    """Report hits and return 1 on failure, or return 0 for clean files.
+
+    Args:
+        argv: File paths to scan. Defaults to ``sys.argv[1:]``; with no paths, the
+            tracked text files of the current directory are scanned.
+
+    Returns:
+        Process exit status: 1 when any hit is found, 0 otherwise.
+    """
     args = sys.argv[1:] if argv is None else argv
     hits = scan(args if args else tracked_text_files(Path.cwd()))
     if hits:
@@ -109,7 +140,11 @@ def main(argv=None):
 
 
 def pytest_configure(config):
-    """Register collection support only when pytest loads this module as a plugin."""
+    """Register collection support only when pytest loads this module as a plugin.
+
+    Args:
+        config: The pytest configuration object.
+    """
     # The CLI and scanner also work without pytest installed.
     import pytest
 
