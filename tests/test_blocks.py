@@ -1,5 +1,6 @@
 """Model paths and the block base: reading, writing, refusal and order."""
 
+from types import MappingProxyType
 from typing import ClassVar
 
 import equinox as eqx
@@ -184,9 +185,9 @@ class _Derived(eqx.Module):
 
 
 class _TiedNode(eqx.Module):
-    """``b`` is derived from ``a``: a writer of ``a`` must also write ``b``."""
+    """``b`` is derived from ``a``: a free ``a`` needs a writer of ``b`` reading it."""
 
-    tied_fields: ClassVar[dict[str, tuple[str, ...]]] = {"b": ("a",)}
+    tied_fields: ClassVar[MappingProxyType] = MappingProxyType({"b": ("a",)})
     a: jnp.ndarray
     b: _Derived
 
@@ -204,19 +205,25 @@ def test_tied_fields_refuse_a_path_inside_and_a_lone_source(prefix):
     """Fails if a tie can be broken by a path inside the derived field or a lone source.
 
     The toy node declares ``b`` derived from ``a``. Refused: a law inside ``b``, a law
-    on ``a`` alone, a block keyed inside ``b``. Accepted: ``a`` with a block that writes
-    ``b``, a block that owns ``b``, a block that writes the node whole. Each case runs
-    with the node under a parent and as the model itself (the root is an ancestor).
+    on ``a`` alone, a block keyed inside ``b``, a law on ``a`` beside an entry that
+    writes ``b`` without reading ``a``. Accepted: ``a`` with a block that writes ``b``
+    and reads ``a``, a block that owns ``b``, a block that writes the node whole. Each
+    case runs with the node under a parent and as the model itself (the root is an
+    ancestor).
     """
     model = _Parent(_tied()) if prefix else _tied()
     a, b, bx = (join(prefix, p) for p in ("a", "b", "b.x"))
     with pytest.raises(ValueError, match=r"inside .*tied together.*block"):
         check_ties(model, {bx: (bx,)})
-    with pytest.raises(ValueError, match=r"source of .*no entry writes.*block"):
+    with pytest.raises(ValueError, match=r"source of .*no entry that reads it.*block"):
         check_ties(model, {a: (a,)})
     with pytest.raises(ValueError, match=r"inside .*tied together"):
         check_ties(model, {bx: (bx, a)})
-    check_ties(model, {a: (a,), b: (b,)})
+    with pytest.raises(ValueError, match=r"source of .*no entry that reads it"):
+        check_ties(model, {a: (a,), b: (b,)})
+    with pytest.raises(ValueError, match=r"source of .*no entry that reads it"):
+        check_ties(model, {a: (a,), "blk": (b,)}, reads={"blk": (bx,)})
+    check_ties(model, {a: (a,), "blk": (b,)}, reads={"blk": (a,)})
     check_ties(model, {b: (b,)})
     check_ties(model, {prefix: (prefix,)})
 

@@ -8,10 +8,11 @@ path and :func:`block_order` to apply the blocks in an order that respects their
 reads.
 
 A model node may declare that some of its fields are derived from others, through a
-class attribute ``tied_fields: ClassVar[dict[str, tuple[str, ...]]]`` that maps each
-derived field to the fields it is derived from (paths relative to the node). A host
+class attribute ``tied_fields``, a read-only mapping from each derived field to the
+fields it is derived from (paths relative to the node). A host
 calls :func:`check_ties` to refuse a free entry that would break such a tie: a path
-inside a derived field, or a source written while nothing writes the derived field.
+inside a derived field, or a source written while no entry that reads it writes the
+derived field.
 The node's library declares the tie and the host checks it, so neither names the
 other. The module knows no domain: orbit, disk and composition blocks subclass
 :class:`AbstractBlock` in the libraries that own them. Needs the ``hwoutils[jax]``
@@ -274,27 +275,34 @@ def block_order(blocks: Mapping[str, AbstractBlock]) -> tuple[str, ...]:
     return tuple(order)
 
 
-def check_ties(model, writes: Mapping[str, Iterable[str]]) -> None:
+def check_ties(
+    model,
+    writes: Mapping[str, Iterable[str]],
+    reads: Mapping[str, Iterable[str]] | None = None,
+) -> None:
     """Refuse free entries that break a tie a model node declares.
 
-    A node whose class declares ``tied_fields`` (derived field to source fields,
-    paths relative to the node) is found at every proper prefix of each written
-    path, the model root included. The check refuses two things: (a) a written path
-    strictly inside a derived field, whose value would no longer agree with its
-    sources; and (b) a written source of a derived field when no entry writes that
-    field or a node containing it, which leaves the derived field at the old source
-    values.
+    A node whose class declares ``tied_fields`` (a mapping from a derived field to the
+    fields it is derived from, paths relative to the node) is found at every proper
+    prefix of each written path, the model root included. The check refuses two
+    things: (a) a written path strictly inside a derived field, whose value would no
+    longer agree with its sources; and (b) a written source of a derived field unless
+    some entry writes that field (or a node containing it) and reads or writes that
+    source, so that the derived field follows the new source values.
 
     Args:
         model: The model the entries write.
         writes: Mapping from each entry's key to the model paths it writes (a leaf
             law writes its key, a block its ``writes``).
+        reads: Mapping from each entry's key to the model paths it reads (a block's
+            ``reads``); an entry left out reads nothing.
 
     Raises:
         ValueError: Naming the path, the derived field and the way out.
     """
-    written = [path for paths in writes.values() for path in paths]
-    for path in written:
+    reads = reads or {}
+    touched = {key: (*paths, *reads.get(key, ())) for key, paths in writes.items()}
+    for path in (p for paths in writes.values() for p in paths):
         for prefix, node in ancestors(model, path):
             for derived, sources in getattr(node, "tied_fields", {}).items():
                 target = join(prefix, derived)
@@ -303,15 +311,20 @@ def check_ties(model, writes: Mapping[str, Iterable[str]]) -> None:
                         f"free path {path!r} lies inside {target!r}, whose fields "
                         f"are tied together: free it through a block at {target!r}"
                     )
-                touches = any(
-                    paths_overlap(path, join(prefix, source)) for source in sources
-                )
-                covered = any(
-                    paths_overlap(other, target) and len(other) <= len(target)
-                    for other in written
-                )
-                if touches and not covered:
-                    raise ValueError(
-                        f"free path {path!r} is a source of {target!r}, which no "
-                        f"entry writes: add a block that writes {target!r}"
+                for source in (join(prefix, s) for s in sources):
+                    if not paths_overlap(path, source):
+                        continue
+                    covered = any(
+                        any(
+                            paths_overlap(w, target) and len(w) <= len(target)
+                            for w in writes[key]
+                        )
+                        and any(paths_overlap(t, source) for t in touched[key])
+                        for key in writes
                     )
+                    if not covered:
+                        raise ValueError(
+                            f"free path {path!r} is a source of {target!r}, which no "
+                            f"entry that reads it writes: add a block that writes "
+                            f"{target!r} from {source!r}"
+                        )
