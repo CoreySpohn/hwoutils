@@ -7,6 +7,7 @@ extra.
 """
 
 import re
+from collections.abc import Iterator
 
 import equinox as eqx
 
@@ -82,6 +83,35 @@ def paths_overlap(a: str, b: str) -> bool:
     if not short:
         return True
     return long == short or (long.startswith(short) and long[len(short)] in (".", "["))
+
+
+def ancestors(model, path: str) -> Iterator[tuple[str, object]]:
+    """Yield ``(prefix, node)`` for every proper prefix of ``path``, root first.
+
+    The root comes first as ``("", model)``; ``[k]`` steps count as steps, so
+    ``"planets[1].mass"`` yields ``""``, ``"planets"`` and ``"planets[1]"``. The
+    path itself is not yielded.
+
+    Args:
+        model: The pytree the path reads.
+        path: Dotted attribute path, as for :func:`resolve`.
+
+    Yields:
+        Pairs of a proper prefix of ``path`` and the node of ``model`` at it.
+
+    Raises:
+        ValueError: As for :func:`resolve`.
+    """
+    prefixes = [""]
+    for part in path.split(".") if path else ():
+        found = _STEP.fullmatch(part)
+        if found is None:
+            raise ValueError(f"malformed model path {path!r}")
+        prefixes.append(join(prefixes[-1], found.group(1)))
+        for index in _INDEX.findall(found.group(2)):
+            prefixes.append(f"{prefixes[-1]}[{index}]")
+    for prefix in prefixes[:-1]:
+        yield prefix, resolve(model, prefix)
 
 
 def join(prefix: str, path: str) -> str:

@@ -1,11 +1,13 @@
 """Model paths and the block base: reading, writing, refusal and order."""
 
+from typing import ClassVar
+
 import equinox as eqx
 import jax.numpy as jnp
 import pytest
 
-from hwoutils.blocks import AbstractBlock, block_order, check_writers
-from hwoutils.model_paths import assign, join, paths_overlap, resolve
+from hwoutils.blocks import AbstractBlock, block_order, check_ties, check_writers
+from hwoutils.model_paths import ancestors, assign, join, paths_overlap, resolve
 
 
 class _Star(eqx.Module):
@@ -133,8 +135,9 @@ def test_a_read_cycle_is_refused():
 
 
 def test_a_block_defaults_to_non_periodic_with_no_unit_map():
-    """Fails if a plain block claims a period or a unit-cube map it does not have."""
+    """Fails if a plain block claims a period, a wall or a unit-cube map it lacks."""
     block = _orbit()
+    assert block.walls == ()
     assert block.periods == (None, None)
     assert block.unit_size is None
     with pytest.raises(NotImplementedError, match="no unit-cube map"):
@@ -174,3 +177,55 @@ def test_join_handles_empty_and_indexed_segments():
     assert join("scene", "star.mass") == "scene.star.mass"
     model = _model()
     assert resolve(model, join("", join("planets", "[1]"))) == 3.0
+
+
+class _Derived(eqx.Module):
+    x: jnp.ndarray
+
+
+class _TiedNode(eqx.Module):
+    """``b`` is derived from ``a``: a writer of ``a`` must also write ``b``."""
+
+    tied_fields: ClassVar[dict[str, tuple[str, ...]]] = {"b": ("a",)}
+    a: jnp.ndarray
+    b: _Derived
+
+
+class _Parent(eqx.Module):
+    node: _TiedNode
+
+
+def _tied():
+    return _TiedNode(jnp.asarray(1.0), _Derived(jnp.asarray(2.0)))
+
+
+@pytest.mark.parametrize("prefix", ["node", ""], ids=["under-a-parent", "at-the-root"])
+def test_tied_fields_refuse_a_path_inside_and_a_lone_source(prefix):
+    """Fails if a tie can be broken by a path inside the derived field or a lone source.
+
+    The toy node declares ``b`` derived from ``a``. Refused: a law inside ``b``, a law
+    on ``a`` alone, a block keyed inside ``b``. Accepted: ``a`` with a block that writes
+    ``b``, a block that owns ``b``, a block that writes the node whole. Each case runs
+    with the node under a parent and as the model itself (the root is an ancestor).
+    """
+    model = _Parent(_tied()) if prefix else _tied()
+    a, b, bx = (join(prefix, p) for p in ("a", "b", "b.x"))
+    with pytest.raises(ValueError, match=r"inside .*tied together.*block"):
+        check_ties(model, {bx: (bx,)})
+    with pytest.raises(ValueError, match=r"source of .*no entry writes.*block"):
+        check_ties(model, {a: (a,)})
+    with pytest.raises(ValueError, match=r"inside .*tied together"):
+        check_ties(model, {bx: (bx, a)})
+    check_ties(model, {a: (a,), b: (b,)})
+    check_ties(model, {b: (b,)})
+    check_ties(model, {prefix: (prefix,)})
+
+
+def test_ancestors_start_at_the_root_and_stop_before_the_path():
+    """Fails if the root or an indexed step is skipped, or the path is yielded."""
+    model = _Parent(_tied())
+    assert [p for p, _ in ancestors(model, "node.b.x")] == ["", "node", "node.b"]
+    assert next(ancestors(model, "node.b.x"))[1] is model
+    assert list(ancestors(model, "")) == []
+    found = [p for p, _ in ancestors(_model(), "planets[1]")]
+    assert found == ["", "planets"]

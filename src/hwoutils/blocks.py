@@ -5,7 +5,15 @@ model paths, carries a normalized density over those coordinates, and declares
 statically which model paths it reads and writes and which coordinates repeat. A
 host that frees several blocks uses :func:`check_writers` to refuse two writers of one
 path and :func:`block_order` to apply the blocks in an order that respects their
-reads. The module knows no domain: orbit, disk and composition blocks subclass
+reads.
+
+A model node may declare that some of its fields are derived from others, through a
+class attribute ``tied_fields: ClassVar[dict[str, tuple[str, ...]]]`` that maps each
+derived field to the fields it is derived from (paths relative to the node). A host
+calls :func:`check_ties` to refuse a free entry that would break such a tie: a path
+inside a derived field, or a source written while nothing writes the derived field.
+The node's library declares the tie and the host checks it, so neither names the
+other. The module knows no domain: orbit, disk and composition blocks subclass
 :class:`AbstractBlock` in the libraries that own them. Needs the ``hwoutils[jax]``
 extra.
 """
@@ -17,14 +25,15 @@ import equinox as eqx
 from jax import Array
 from jax.typing import ArrayLike
 
-from hwoutils.model_paths import paths_overlap
+from hwoutils.model_paths import ancestors, join, paths_overlap
 
 
 class AbstractBlock(eqx.Module):
     """Coordinates that write a node of a model, with a normalized density.
 
     Coordinates ``x`` are real numbers, one named array per coordinate, with no
-    boundary: every coordinate takes any real value. A coordinate listed in
+    boundary: every coordinate takes any real value; a zero-density region inside
+    those values is a wall and is listed in :attr:`walls`. A coordinate listed in
     :attr:`periods` is an angle-like one: the model depends on it only through its value
     modulo the period, and the density is that of one fundamental cell
     ``[0, period)``, repeated outside it. Such a density is normalized per cell and is
@@ -64,6 +73,18 @@ class AbstractBlock(eqx.Module):
         All ``None`` by default.
         """
         return (None,) * len(self.coordinate_names)
+
+    @property
+    def walls(self) -> tuple[str, ...]:
+        """Names of the bounded quantities whose bounds the coordinates do not map.
+
+        A block cannot see the model, so a name is listed when for some model
+        :meth:`log_prob` is ``-inf`` on a set of positive measure at finite
+        coordinates. Empty (the default) means that for every model the density is
+        positive almost everywhere in the coordinates. Evaluated on the host; a bound
+        that is not mapped and whose value is traced is listed.
+        """
+        return ()
 
     @property
     def unit_size(self) -> int | None:
@@ -251,3 +272,46 @@ def block_order(blocks: Mapping[str, AbstractBlock]) -> tuple[str, ...]:
             raise ValueError("blocks read each other's writes in a cycle")
         order.append(ready)
     return tuple(order)
+
+
+def check_ties(model, writes: Mapping[str, Iterable[str]]) -> None:
+    """Refuse free entries that break a tie a model node declares.
+
+    A node whose class declares ``tied_fields`` (derived field to source fields,
+    paths relative to the node) is found at every proper prefix of each written
+    path, the model root included. The check refuses two things: (a) a written path
+    strictly inside a derived field, whose value would no longer agree with its
+    sources; and (b) a written source of a derived field when no entry writes that
+    field or a node containing it, which leaves the derived field at the old source
+    values.
+
+    Args:
+        model: The model the entries write.
+        writes: Mapping from each entry's key to the model paths it writes (a leaf
+            law writes its key, a block its ``writes``).
+
+    Raises:
+        ValueError: Naming the path, the derived field and the way out.
+    """
+    written = [path for paths in writes.values() for path in paths]
+    for path in written:
+        for prefix, node in ancestors(model, path):
+            for derived, sources in getattr(node, "tied_fields", {}).items():
+                target = join(prefix, derived)
+                if len(path) > len(target) and paths_overlap(path, target):
+                    raise ValueError(
+                        f"free path {path!r} lies inside {target!r}, whose fields "
+                        f"are tied together: free it through a block at {target!r}"
+                    )
+                touches = any(
+                    paths_overlap(path, join(prefix, source)) for source in sources
+                )
+                covered = any(
+                    paths_overlap(other, target) and len(other) <= len(target)
+                    for other in written
+                )
+                if touches and not covered:
+                    raise ValueError(
+                        f"free path {path!r} is a source of {target!r}, which no "
+                        f"entry writes: add a block that writes {target!r}"
+                    )
