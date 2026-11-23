@@ -20,6 +20,7 @@ import numpy as np
 
 from hwoutils.constants import d2s
 
+_MJD_OFFSET_D = 2400000.5  # JD - MJD [d]
 _SCALES = ("tdb", "tt", "tcb", "tai", "utc")
 
 
@@ -53,27 +54,51 @@ class Epoch:
                 f"time is on scale {scale!r} but the epoch is on {self.scale!r}"
             )
 
-    def days(self, time_jd) -> np.ndarray:
-        """Offset of a Julian date from the epoch [d], NumPy float64 on the host.
+    def days(self, time=None, *, jd=None, mjd=None) -> np.ndarray:
+        """Offset of a date from the epoch [d], NumPy float64 on the host.
 
-        ``time_jd`` is a numeric Julian date (scalar or array) or an object
-        exposing ``jd1`` and ``jd2`` (for example ``astropy.time.Time``),
-        which keeps sub-day precision. An object with a ``scale`` attribute
-        that differs from the epoch's raises ``ValueError``.
+        Exactly one of ``time``, ``jd`` and ``mjd`` is given. A bare number is
+        never accepted positionally, because a Julian date and a modified
+        Julian date differ by 2400000.5 d and the two cannot be told apart.
+        Name the dialect: ``jd=`` for a Julian date, ``mjd=`` for a modified
+        Julian date (JD - 2400000.5). The ``mjd=`` offset subtracts the epoch
+        parts from the date in an order that keeps float64 precision: the
+        shift ``jd1 - 2400000.5`` is exact for any ``jd1`` that is a multiple
+        of 0.5 d, so the only rounding is that of the final differences.
 
         Args:
-            time_jd: Julian date [d] as a number or array, or an object with ``jd1``
-                and ``jd2`` [d] attributes.
+            time: Object exposing ``jd1`` and ``jd2`` [d] (for example
+                ``astropy.time.Time``), which keeps sub-day precision. An
+                object with a ``scale`` attribute that differs from the
+                epoch's raises ``ValueError``.
+            jd: Julian date [d] as a number or array.
+            mjd: Modified Julian date [d] (JD - 2400000.5) as a number or array.
 
         Returns:
-            Offset from the epoch [d], float64, with the shape of ``time_jd``.
+            Offset from the epoch [d], float64, with the shape of the date.
+
+        Raises:
+            ValueError: If not exactly one of ``time``, ``jd`` and ``mjd`` is
+                given, or if the time scales differ.
+            TypeError: If ``time`` is a bare number or array.
         """
-        self._check_scale(time_jd)
-        if hasattr(time_jd, "jd1") and hasattr(time_jd, "jd2"):
-            return (np.asarray(time_jd.jd1, dtype=np.float64) - self.jd1) + (
-                np.asarray(time_jd.jd2, dtype=np.float64) - self.jd2
+        if sum(x is not None for x in (time, jd, mjd)) != 1:
+            raise ValueError("give exactly one of time, jd= or mjd=")
+        if time is not None:
+            if not (hasattr(time, "jd1") and hasattr(time, "jd2")):
+                raise TypeError(
+                    "a bare number is ambiguous between Julian and modified Julian "
+                    "dates; name the dialect with jd= or mjd=, or pass an object "
+                    "with jd1 and jd2 (for example astropy Time)"
+                )
+            self._check_scale(time)
+            return (np.asarray(time.jd1, dtype=np.float64) - self.jd1) + (
+                np.asarray(time.jd2, dtype=np.float64) - self.jd2
             )
-        return (np.asarray(time_jd, dtype=np.float64) - self.jd1) - self.jd2
+        if jd is not None:
+            return (np.asarray(jd, dtype=np.float64) - self.jd1) - self.jd2
+        shift = self.jd1 - _MJD_OFFSET_D
+        return (np.asarray(mjd, dtype=np.float64) - shift) - self.jd2
 
     def jd(self, time_d) -> np.ndarray:
         """Julian date of an offset in days, NumPy float64 on the host.

@@ -76,7 +76,7 @@ Julian dates into offsets once, on the host in float64.
 from hwoutils.epoch import Epoch
 
 epoch = Epoch(const.J2000_JD)
-time_d = epoch.days(const.J2000_JD + 365.25)
+time_d = epoch.days(jd=const.J2000_JD + 365.25)
 print(time_d)
 assert float(time_d) == 365.25
 assert float(epoch.jd(time_d)) == const.J2000_JD + 365.25
