@@ -9,6 +9,7 @@ import os
 import re
 
 import jax
+import numpy as np
 
 
 def enable_x64(use_x64: bool = True) -> None:
@@ -25,6 +26,28 @@ def enable_x64(use_x64: bool = True) -> None:
     if not use_x64:
         use_x64 = bool(os.getenv("JAX_ENABLE_X64", 0))
     jax.config.update("jax_enable_x64", use_x64)
+
+
+def float_dtype() -> np.dtype:
+    """Return the active float dtype: float64 under x64, else float32.
+
+    Read it when an object is built, not at import, so that a test which
+    scopes ``jax.enable_x64()`` around a construction sees the precision in
+    force there.
+
+    Returns:
+        The NumPy dtype that JAX uses for a default float array.
+    """
+    return np.dtype(jax.dtypes.canonicalize_dtype(np.float64))
+
+
+def dtype_tag() -> str:
+    """Return a short cache key for the active float dtype.
+
+    Returns:
+        ``"f64"`` when the active float dtype is 8 bytes wide, else ``"f32"``.
+    """
+    return "f64" if float_dtype().itemsize == 8 else "f32"
 
 
 def set_platform(platform: str | None = None) -> None:
