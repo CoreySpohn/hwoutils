@@ -280,3 +280,47 @@ def test_plugin_records_and_never_raises(pytester, monkeypatch):
         "test_plugin_cases.py::test_inside_raises",
     ]
     result.stdout.fnmatch_lines(["*test_plugin_cases.Raw.value: ndarray float64*x2"])
+
+
+class Keyed(eqx.Module):
+    key: jax.Array
+    value: jax.Array
+
+
+def test_typed_key_is_a_valid_leaf(x64):
+    """Exact count basis. Fails if a typed PRNG key crashes or is flagged."""
+    model = Keyed(jax.random.key(0), jnp.ones(2))
+    assert check_tree(model) == ()
+    require_tree(model)
+    assert canonical(model).key.dtype == model.key.dtype
+
+
+def test_equinox_modules_are_foreign():
+    """Exact count basis. Fails if an ``eqx.nn`` module is entered: it holds a
+    Python float and bool that the leaf rule would report."""
+    held = Held(eqx.nn.Dropout(0.5))
+    assert check_tree(held) == ()
+    require_tree(held)
+    assert canonical(held).value.p == 0.5
+
+
+def test_as_float_leaf_refuses_overflow():
+    """Exact basis: float32 holds up to 3.4028235e38. Fails if a finite
+    float64 above it silently becomes inf under x32, or if x64, NaN, inf or a
+    tracer is refused."""
+    with jax.enable_x64(False):
+        with pytest.raises(ValueError, match="do not fit float32"):
+            as_float_leaf(np.array([1.0, 1e300]))
+        assert np.isinf(as_float_leaf(np.array([np.inf]))[0])
+        assert np.isnan(as_float_leaf(np.array([np.nan]))[0])
+        assert as_float_leaf(1e30) == jnp.float32(1e30)
+        assert jax.jit(as_float_leaf)(jnp.ones(2)).dtype == jnp.float32
+    with jax.enable_x64(True):
+        assert as_float_leaf(np.array([1e300]))[0] == 1e300
+
+
+def test_bfloat16_is_flagged_like_float16(x64):
+    """Exact count basis. Fails if a bfloat16 leaf passes as a float."""
+    for dtype in (jnp.float16, jnp.bfloat16):
+        found = check_tree(Held(jnp.ones(2, dtype=dtype)))
+        assert [v.reason for v in found] == ["float dtype is not active"], dtype

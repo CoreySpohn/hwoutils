@@ -73,7 +73,7 @@ OWNED_PACKAGES = frozenset(
 )
 """Top-level packages whose Modules follow the leaf rule."""
 
-FOREIGN_PACKAGES = frozenset({"diffrax", "interpax", "lineax", "optimistix"})
+FOREIGN_PACKAGES = frozenset({"diffrax", "equinox", "interpax", "lineax", "optimistix"})
 """Third-party packages whose Modules :func:`require_tree` does not enter."""
 
 _PYTHON_NUMBERS = (bool, int, float, complex)
@@ -146,13 +146,32 @@ def as_float_leaf(x: Any) -> jax.Array:
 
     Raises:
         TypeError: If ``x`` is complex; use :func:`as_complex_leaf`.
+        ValueError: If a concrete finite ``x`` becomes infinite in the active
+            dtype (a float64 value beyond the float32 range under x32).
+            Tracers are not checked.
     """
-    if np.issubdtype(_source_dtype(x), np.complexfloating):
+    source = _source_dtype(x)
+    if np.issubdtype(source, np.complexfloating):
         raise TypeError(
             "a complex value cannot be stored on a real field; declare the "
             "field with as_complex_leaf"
         )
-    return jnp.asarray(x, dtype=float_dtype())
+    with np.errstate(over="ignore"):
+        out = jnp.asarray(x, dtype=float_dtype())
+    if (
+        np.issubdtype(source, np.floating)
+        and source.itemsize > out.dtype.itemsize
+        and not is_traced(x)
+        and not is_traced(out)
+    ):
+        overflow = np.isfinite(np.asarray(x)) & ~np.isfinite(np.asarray(out))
+        if overflow.any():
+            raise ValueError(
+                f"finite values do not fit {out.dtype.name}, which holds up to "
+                f"{float(np.finfo(out.dtype).max):.3e}; enable x64, or rescale "
+                "the quantity"
+            )
+    return out
 
 
 def as_complex_leaf(x: Any) -> jax.Array:
@@ -339,12 +358,14 @@ def _violation(path, leaf, allowed: bool) -> LeafViolation | None:
         return LeafViolation(name, kind, "", "Python number leaf")
     if not isinstance(leaf, jax.Array | jax.core.Tracer):
         return None
+    if jax.dtypes.issubdtype(leaf.dtype, jax.dtypes.prng_key):
+        return None
     dtype = np.dtype(leaf.dtype)
     if getattr(leaf, "weak_type", False):
         return LeafViolation(name, kind, dtype.name, "weakly typed leaf")
     if np.issubdtype(dtype, np.complexfloating) and dtype != _complex_dtype():
         return LeafViolation(name, kind, dtype.name, "complex dtype is not active")
-    if np.issubdtype(dtype, np.floating) and dtype != float_dtype():
+    if jnp.issubdtype(dtype, jnp.floating) and dtype != float_dtype():
         if not (allowed and dtype.itemsize < float_dtype().itemsize):
             return LeafViolation(name, kind, dtype.name, "float dtype is not active")
     return None
@@ -362,7 +383,8 @@ def check_tree(
     """Return the leaves of a tree that break the leaf rule.
 
     A violation is a NumPy array or scalar, a Python number, a weakly typed
-    array, or a floating or complex array whose dtype is not the active one.
+    array, or a floating (float16 and bfloat16 included) or complex array
+    whose dtype is not the active one. A typed PRNG key is a valid leaf.
     A leaf under a field declared with ``as_bulk_leaf``, or at a path named in
     ``bulk``, may keep a narrower float dtype. The walk enters a nested Module
     only when it is owned (:func:`is_owned` over :data:`OWNED_PACKAGES` and
@@ -418,6 +440,8 @@ def require_tree(
 
 
 def _is_number(x) -> bool:
+    if isinstance(x, jax.Array) and jax.dtypes.issubdtype(x.dtype, jax.dtypes.prng_key):
+        return False
     return is_data(x) or isinstance(x, _PYTHON_NUMBERS)
 
 
