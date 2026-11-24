@@ -1,8 +1,7 @@
 """FFT-based sub-pixel image shifting.
 
-Provides Fourier shift primitives for sub-pixel image translation. The JAX
-versions (fft_shift_x, fft_shift_y) accept precomputed phasors for efficient
-repeated shifts. The NumPy versions (fft_shift, fft_shift_1d) are standalone.
+Provides Fourier shift primitives for sub-pixel image translation with JAX
+(fft_shift_x, fft_shift_y) and NumPy (fft_shift, fft_shift_1d).
 
 All functions operate on 2D images via separable 1D FFTs along each axis,
 which is O(2N * N log N) vs O(N^2 log N^2) for a full 2D FFT.
@@ -36,21 +35,19 @@ def get_pad_info(image, pad_factor):
 
 
 # ---------------------------------------------------------------------------
-# JAX versions (JIT-compatible, require precomputed phasors)
+# JAX versions (JIT-compatible)
 # ---------------------------------------------------------------------------
 
 
 def fft_shift_x(image, shift_pixels, phasor, clamp=True):
     """Apply a Fourier shift along the x-axis (JAX, JIT-compatible).
 
-    Uses a precomputed phasor for efficient repeated shifts of images
-    with the same shape.
     Rectangular images keep real/complex kind; complex input requires clamp=False.
 
     Args:
         image: 2D input image (JAX array).
         shift_pixels: Sub-pixel shift amount along x.
-        phasor: Precomputed exp(-2j * pi * fft_freqs) for the padded size.
+        phasor: Legacy argument kept for compatibility and ignored.
         clamp: If True, clamp negative values to zero after shift.
 
     Returns:
@@ -67,8 +64,9 @@ def fft_shift_x(image, shift_pixels, phasor, clamp=True):
     padded = lax.pad(image, pad_val, [(n_pad, n_pad, 0), (n_pad, n_pad, 0)])
     padded = jnp.fft.fft(padded, axis=1)
 
-    phasor = jnp.tile(phasor**shift_pixels, (padded.shape[0], 1))
-    padded = padded * phasor
+    freqs = jnp.fft.fftfreq(padded.shape[1], dtype=padded.real.dtype)
+    phase_ramp = jnp.exp(-2j * jnp.pi * freqs * shift_pixels)
+    padded = padded * phase_ramp
 
     padded = jnp.fft.ifft(padded, axis=1)
     if not jnp.iscomplexobj(image):
@@ -83,14 +81,12 @@ def fft_shift_x(image, shift_pixels, phasor, clamp=True):
 def fft_shift_y(image, shift_pixels, phasor, clamp=True):
     """Apply a Fourier shift along the y-axis (JAX, JIT-compatible).
 
-    Uses a precomputed phasor for efficient repeated shifts of images
-    with the same shape.
     Rectangular images keep real/complex kind; complex input requires clamp=False.
 
     Args:
         image: 2D input image (JAX array).
         shift_pixels: Sub-pixel shift amount along y.
-        phasor: Precomputed exp(-2j * pi * fft_freqs) for the padded size.
+        phasor: Legacy argument kept for compatibility and ignored.
         clamp: If True, clamp negative values to zero after shift.
 
     Returns:
@@ -107,8 +103,9 @@ def fft_shift_y(image, shift_pixels, phasor, clamp=True):
     padded = lax.pad(image, pad_val, [(n_pad, n_pad, 0), (n_pad, n_pad, 0)])
     padded = jnp.fft.fft(padded, axis=0)
 
-    phasor = jnp.tile(phasor**shift_pixels, (padded.shape[1], 1)).T
-    padded = padded * phasor
+    freqs = jnp.fft.fftfreq(padded.shape[0], dtype=padded.real.dtype)
+    phase_ramp = jnp.exp(-2j * jnp.pi * freqs * shift_pixels)
+    padded = padded * phase_ramp[:, None]
 
     padded = jnp.fft.ifft(padded, axis=0)
     if not jnp.iscomplexobj(image):

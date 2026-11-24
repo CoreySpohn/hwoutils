@@ -80,6 +80,22 @@ def test_real_rectangular_roundtrip_periodic(periodic_padding, backend, shape):
     np.testing.assert_allclose(roundtrip, image, rtol=0, atol=1e-12)
 
 
+def _direct_dft_shift(image, shift_pixels, axis):
+    n_pad = int(1.5 * image.shape[0])
+    padded = np.pad(image, n_pad)
+    n = padded.shape[axis]
+    samples = np.arange(n)
+    freqs = np.fft.fftfreq(n)
+    # Evaluate the zero-extended trigonometric interpolant at shifted samples
+    # using explicit Fourier sums, independently of the FFT implementation.
+    forward = np.exp(-2j * np.pi * freqs[:, None] * samples)
+    inverse = np.exp(2j * np.pi * (samples[:, None] - shift_pixels) * freqs) / n
+    expected = np.moveaxis(inverse @ (forward @ np.moveaxis(padded, axis, 0)), 0, axis)[
+        n_pad : n_pad + image.shape[0], n_pad : n_pad + image.shape[1]
+    ]
+    return expected if np.iscomplexobj(image) else expected.real
+
+
 @pytest.mark.parametrize("backend", ["numpy", "jax"])
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("complex_input", [False, True])
@@ -88,25 +104,26 @@ def test_rectangular_zero_padding_direct_dft(backend, axis, complex_input):
     image = np.cos(x + y / 3)
     if complex_input:
         image = image + 1j * np.sin(x / 2 - y)
-    n_pad = 12
-    padded = np.pad(image, n_pad)
-    n = padded.shape[axis]
-    samples = np.arange(n)
-    freqs = np.fft.fftfreq(n)
-    # Evaluate the zero-extended trigonometric interpolant at shifted samples
-    # using explicit Fourier sums, independently of the FFT implementation.
-    forward = np.exp(-2j * np.pi * freqs[:, None] * samples)
-    inverse = np.exp(2j * np.pi * (samples[:, None] - 1.25) * freqs) / n
-    expected = np.moveaxis(inverse @ (forward @ np.moveaxis(padded, axis, 0)), 0, axis)[
-        n_pad : n_pad + image.shape[0], n_pad : n_pad + image.shape[1]
-    ]
-    if not complex_input:
-        expected = expected.real
+    expected = _direct_dft_shift(image, 1.25, axis)
     with jax.enable_x64():
         shifted = _shift(image, 1.25, axis, backend)
     assert shifted.shape == image.shape
     assert np.iscomplexobj(shifted) == complex_input
     np.testing.assert_allclose(shifted, expected, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("backend", ["numpy", "jax"])
+@pytest.mark.parametrize("axis", [0, 1], ids=["y", "x"])
+def test_complex64_nyquist_half_pixel_shift(backend, axis):
+    coordinate = np.indices((32, 48))[axis]
+    image = ((-1) ** coordinate).astype(np.complex64)
+    expected = _direct_dft_shift(image, 0.5, axis)
+    # Force the legacy unit phasor to use float32 frequencies at Nyquist.
+    with jax.enable_x64(False):
+        shifted = _shift(image, 0.5, axis, backend)
+    assert shifted.shape == image.shape
+    assert np.iscomplexobj(shifted)
+    np.testing.assert_allclose(shifted, expected, rtol=0, atol=1e-6)
 
 
 def test_two_axis_complex_wave_periodic(periodic_padding):
@@ -128,9 +145,8 @@ def test_complex_clamp_rejected_on_host(func):
 
 @pytest.mark.parametrize("backend", ["numpy", "jax"])
 @pytest.mark.parametrize("axis", [0, 1])
-def test_real_square_bitwise_base(gaussian_psf, backend, axis):
-    # Frozen square-real implementation from 121d2c1. Keep its operation order
-    # to detect any rounding change, including the JAX clamp.
+def test_real_square_matches_base(gaussian_psf, backend, axis):
+    # Frozen square-real implementation from 121d2c1, including the JAX clamp.
     xp = np if backend == "numpy" else jnp
     with jax.enable_x64():
         image = xp.asarray(gaussian_psf)
@@ -148,12 +164,17 @@ def test_real_square_bitwise_base(gaussian_psf, backend, axis):
         expected = xp.real(xp.fft.ifft(spectrum * phasor, axis=axis))
         expected = expected[n_pad:edge, n_pad:edge]
         actual = _shift(image, 1.25, axis, backend)
-        np.testing.assert_array_equal(actual, expected)
-        if backend == "jax":
+        if backend == "numpy":
+            np.testing.assert_array_equal(actual, expected)
+        else:
+            # Direct exponentiation changes floating-point rounding in JAX.
+            np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-15)
             func = fft.fft_shift_x if axis == 1 else fft.fft_shift_y
             phasor = xp.exp(-2j * xp.pi * freqs)
             clamped = func(image, 1.25, phasor)
-            np.testing.assert_array_equal(clamped, xp.maximum(expected, 0.0))
+            np.testing.assert_allclose(
+                clamped, xp.maximum(expected, 0.0), rtol=0, atol=1e-15
+            )
 
 
 class TestShiftFidelity:
