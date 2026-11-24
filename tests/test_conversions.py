@@ -8,6 +8,9 @@ import pytest
 from hwoutils import constants as const
 from hwoutils import conversions as conv
 
+PLANCK_CONSTANT_SI = 6.62607015e-34  # CODATA Planck constant [J*s]
+JANSKY_SI = 1e-26  # Definition of 1 Jy [W*m^-2*Hz^-1]
+
 # =============================================================================
 # Flux Conversions
 # =============================================================================
@@ -16,13 +19,15 @@ from hwoutils import conversions as conv
 class TestFluxConversions:
     """Tests for flux conversion functions."""
 
+    def test_jy_conversion_constants(self):
+        assert const.h == PLANCK_CONSTANT_SI
+        assert const.Jy == JANSKY_SI
+
     @pytest.mark.parametrize("flux_jy", [1e-13, 1e-20])
     def test_faint_jy_float32(self, flux_jy):
         wavelength_nm = jnp.asarray(550.0, dtype=jnp.float32)
         flux = jnp.asarray(flux_jy, dtype=jnp.float32)
-        # Hand calculation in float64 from the Jy definition and CODATA h in
-        # hwoutils.constants: 1e-13 Jy at 550 nm gives 2.743982144803913e-9.
-        expected = np.float64(flux_jy) * const.Jy / (550.0 * const.h)
+        expected = np.float64(flux_jy) * JANSKY_SI / (550.0 * PLANCK_CONSTANT_SI)
         actual = conv.jy_to_photons_per_nm_per_m2(flux, wavelength_nm)
         assert actual.dtype == jnp.float32
         assert np.isfinite(actual) and actual > 0
@@ -43,9 +48,8 @@ class TestFluxConversions:
         derivative = jax.grad(conv.jy_to_photons_per_nm_per_m2, argnums=1)(
             flux, wavelength_nm
         )
-        # Analytic derivative -value / wavelength; CODATA h and the Jy
-        # definition give -49.89058445098023 per nm at 1 Jy, in float64.
-        value = np.float64(flux_jy) * const.Jy / (550.0 * const.h)
+        # Analytic derivative is -value / wavelength.
+        value = np.float64(flux_jy) * JANSKY_SI / (550.0 * PLANCK_CONSTANT_SI)
         expected = -value / 550.0
         assert derivative.dtype == jnp.float32
         assert np.isfinite(derivative)
@@ -53,13 +57,12 @@ class TestFluxConversions:
 
     @pytest.mark.parametrize("backend", [np, jnp], ids=["numpy", "jax"])
     def test_jy_float64_matches_base_operation_order(self, backend):
-        # Freeze the formulas in 121d2c1, using the central constants rather
-        # than rounded copies of physical constants.
+        # Freeze the operation order of the original conversion formulas.
         with jax.enable_x64():
             flux = backend.asarray(np.logspace(-20, 20, 9))[:, None]
             wavelength_nm = backend.asarray(np.logspace(2, 4, 5))[None, :]
-            expected_phot = flux * const.Jy / (wavelength_nm * const.h)
-            expected_jy = flux * (wavelength_nm * const.h) / const.Jy
+            expected_phot = flux * JANSKY_SI / (wavelength_nm * PLANCK_CONSTANT_SI)
+            expected_jy = flux * (wavelength_nm * PLANCK_CONSTANT_SI) / JANSKY_SI
             actual_phot = conv.jy_to_photons_per_nm_per_m2(flux, wavelength_nm)
             actual_jy = conv.photons_per_nm_per_m2_to_jy(flux, wavelength_nm)
         np.testing.assert_array_max_ulp(
@@ -104,9 +107,9 @@ class TestFluxConversions:
         flux_phot = conv.jy_to_photons_per_nm_per_m2(FLUX_JY, WAVELENGTH_NM)
 
         wavelength_m = WAVELENGTH_NM * 1e-9
-        energy_per_photon = const.h * const.c / wavelength_m
+        energy_per_photon = PLANCK_CONSTANT_SI * const.c / wavelength_m
         c_over_lambda_sq_per_nm = const.c / (wavelength_m**2) * 1e-9
-        flux_power_per_nm = FLUX_JY * const.Jy * c_over_lambda_sq_per_nm
+        flux_power_per_nm = FLUX_JY * JANSKY_SI * c_over_lambda_sq_per_nm
         expected = flux_power_per_nm / energy_per_photon
 
         assert jnp.isclose(flux_phot, expected, rtol=0.01)
