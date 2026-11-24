@@ -26,6 +26,7 @@ grid an operator is built on, is a :class:`HostGrid`: immutable float64 on
 the host, hashed and compared by a digest, stored on a static field.
 """
 
+import contextlib
 import dataclasses
 import hashlib
 import reprlib
@@ -508,7 +509,9 @@ def canonical(tree: Any, *, device: Any = None, foreign: Iterable[str] = ()) -> 
     Args:
         tree: Any pytree.
         device: Device or sharding to place the leaves on; the default device
-            when None.
+            when None. Given, each leaf is converted on the host (on that
+            device when it is a single device, else on the first CPU device)
+            and placed once, so nothing is staged on the default device.
         foreign: Extra third-party package names whose Modules are kept as is.
 
     Returns:
@@ -525,10 +528,17 @@ def canonical(tree: Any, *, device: Any = None, foreign: Iterable[str] = ()) -> 
         if allowed
     }
 
+    if device is None:
+        staging = contextlib.nullcontext()
+    else:
+        host = device if isinstance(device, jax.Device) else jax.devices("cpu")[0]
+        staging = jax.default_device(host)
+
     def convert(path, leaf):
         if stop(leaf) or not _is_number(leaf):
             return leaf
-        out = as_bulk_leaf(leaf) if path in bulk else as_leaf(leaf)
+        with staging:
+            out = as_bulk_leaf(leaf) if path in bulk else as_leaf(leaf)
         return out if device is None else jax.device_put(out, device)
 
     return jax.tree_util.tree_map_with_path(convert, tree, is_leaf=stop)

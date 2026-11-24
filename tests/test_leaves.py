@@ -7,6 +7,9 @@ decide ownership from module names, so the stand-ins exercise the same path.
 """
 
 import json
+import os
+import subprocess
+import sys
 
 import equinox as eqx
 import jax
@@ -367,3 +370,35 @@ def test_bfloat16_is_flagged_like_float16(x64):
     for dtype in (jnp.float16, jnp.bfloat16):
         found = check_tree(Held(jnp.ones(2, dtype=dtype)))
         assert [v.reason for v in found] == ["float dtype is not active"], dtype
+
+
+_TWO_CPUS = """
+import jax, numpy as np
+from hwoutils.leaves import canonical
+cpu0, cpu1 = jax.devices("cpu")[:2]
+tree = {"x": np.arange(5.0), "n": np.arange(3), "k": [1.5, 2]}
+staged = []
+put = jax.device_put
+jax.device_put = lambda x, *a, **k: (staged.append(x.devices()), put(x, *a, **k))[1]
+with jax.default_device(cpu1):
+    before = len([a for a in jax.live_arrays() if a.devices() == {cpu1}])
+    out = canonical(tree, device=cpu0)
+    after = len([a for a in jax.live_arrays() if a.devices() == {cpu1}])
+leaves = jax.tree.leaves(out)
+assert leaves and all(x.devices() == {cpu0} for x in leaves)
+assert after == before
+assert staged == [{cpu0}] * len(leaves)
+"""
+
+
+def test_canonical_places_once_without_staging_on_the_default_device():
+    """Fails if a leaf is first built on the default device, then moved.
+
+    Truth: with two CPU devices and the second as the default, every array
+    handed to ``device_put`` must already be on the target device (a leaf built
+    on the default device would show there), every output leaf sits on the
+    target, and no buffer remains on the default device. Exact, no tolerance.
+    A subprocess sets the device count before JAX starts.
+    """
+    env = dict(os.environ, XLA_FLAGS="--xla_force_host_platform_device_count=2")
+    subprocess.run([sys.executable, "-c", _TWO_CPUS], check=True, env=env)
