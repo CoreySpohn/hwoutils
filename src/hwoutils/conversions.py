@@ -8,6 +8,9 @@ are not JIT-compiled so JAX can fuse them into larger computation graphs.
 from hwoutils import constants as const
 from hwoutils.constants import AB_ZERO_POINT_JY as AB_ZERO_POINT_JY
 
+JY_OVER_H = const.Jy / const.h
+H_OVER_JY = const.h / const.Jy
+
 # ---------------------------------------------------------------------------
 # Flux conversions
 # ---------------------------------------------------------------------------
@@ -16,6 +19,8 @@ from hwoutils.constants import AB_ZERO_POINT_JY as AB_ZERO_POINT_JY
 def jy_to_photons_per_nm_per_m2(flux_jy, wavelength_nm):
     """Convert flux density from Janskys to photons/s/nm/m^2.
 
+    Supports float32 and float64 inputs with representable intermediates.
+
     Args:
         flux_jy: Flux density in Janskys.
         wavelength_nm: Wavelength in nanometers.
@@ -23,11 +28,13 @@ def jy_to_photons_per_nm_per_m2(flux_jy, wavelength_nm):
     Returns:
         Flux density in photons/s/nm/m^2.
     """
-    return flux_jy * const.Jy / (wavelength_nm * const.h)
+    return flux_jy * JY_OVER_H / wavelength_nm
 
 
 def photons_per_nm_per_m2_to_jy(flux_phot, wavelength_nm):
     """Convert flux density from photons/s/nm/m^2 to Janskys.
+
+    Supports float32 and float64 inputs with representable intermediates.
 
     Args:
         flux_phot: Flux density in photons/s/nm/m^2.
@@ -36,7 +43,7 @@ def photons_per_nm_per_m2_to_jy(flux_phot, wavelength_nm):
     Returns:
         Flux density in Janskys.
     """
-    return flux_phot * (wavelength_nm * const.h) / const.Jy
+    return flux_phot * wavelength_nm * H_OVER_JY
 
 
 def photons_per_nm_per_m2_to_w_per_nm_per_m2(flux_phot, wavelength_nm):

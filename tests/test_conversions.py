@@ -1,6 +1,9 @@
 """Tests for hwoutils.conversions -- unit conversion functions."""
 
+import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
 
 from hwoutils import constants as const
 from hwoutils import conversions as conv
@@ -12,6 +15,59 @@ from hwoutils import conversions as conv
 
 class TestFluxConversions:
     """Tests for flux conversion functions."""
+
+    @pytest.mark.parametrize("flux_jy", [1e-13, 1e-20])
+    def test_faint_jy_float32(self, flux_jy):
+        wavelength_nm = jnp.asarray(550.0, dtype=jnp.float32)
+        flux = jnp.asarray(flux_jy, dtype=jnp.float32)
+        # Hand calculation in float64 from the Jy definition and CODATA h in
+        # hwoutils.constants: 1e-13 Jy at 550 nm gives 2.743982144803913e-9.
+        expected = np.float64(flux_jy) * const.Jy / (550.0 * const.h)
+        actual = conv.jy_to_photons_per_nm_per_m2(flux, wavelength_nm)
+        assert actual.dtype == jnp.float32
+        assert np.isfinite(actual) and actual > 0
+        np.testing.assert_array_max_ulp(np.asarray(actual), np.float32(expected), 4)
+
+        # Use independent photon input so errors in the two directions cannot cancel.
+        reverse = conv.photons_per_nm_per_m2_to_jy(
+            jnp.asarray(expected, dtype=jnp.float32), wavelength_nm
+        )
+        assert reverse.dtype == jnp.float32
+        assert np.isfinite(reverse) and reverse > 0
+        np.testing.assert_array_max_ulp(np.asarray(reverse), np.float32(flux_jy), 4)
+
+    @pytest.mark.parametrize("flux_jy", [1.0, 1e-13])
+    def test_jy_wavelength_gradient_float32(self, flux_jy):
+        flux = jnp.asarray(flux_jy, dtype=jnp.float32)
+        wavelength_nm = jnp.asarray(550.0, dtype=jnp.float32)
+        derivative = jax.grad(conv.jy_to_photons_per_nm_per_m2, argnums=1)(
+            flux, wavelength_nm
+        )
+        # Analytic derivative -value / wavelength; CODATA h and the Jy
+        # definition give -49.89058445098023 per nm at 1 Jy, in float64.
+        value = np.float64(flux_jy) * const.Jy / (550.0 * const.h)
+        expected = -value / 550.0
+        assert derivative.dtype == jnp.float32
+        assert np.isfinite(derivative)
+        np.testing.assert_allclose(derivative, expected, rtol=1e-6, atol=0)
+
+    @pytest.mark.parametrize("backend", [np, jnp], ids=["numpy", "jax"])
+    def test_jy_float64_matches_base_operation_order(self, backend):
+        # Freeze the formulas in 121d2c1, using the central constants rather
+        # than rounded copies of physical constants.
+        with jax.enable_x64():
+            flux = backend.asarray(np.logspace(-20, 20, 9))[:, None]
+            wavelength_nm = backend.asarray(np.logspace(2, 4, 5))[None, :]
+            expected_phot = flux * const.Jy / (wavelength_nm * const.h)
+            expected_jy = flux * (wavelength_nm * const.h) / const.Jy
+            actual_phot = conv.jy_to_photons_per_nm_per_m2(flux, wavelength_nm)
+            actual_jy = conv.photons_per_nm_per_m2_to_jy(flux, wavelength_nm)
+        np.testing.assert_array_max_ulp(
+            np.asarray(actual_phot), np.asarray(expected_phot), 2
+        )
+        np.testing.assert_array_max_ulp(
+            np.asarray(actual_jy), np.asarray(expected_jy), 2
+        )
 
     def test_jy_to_photons_roundtrip(self):
         """Verify Jy to photons conversion is reversible."""
