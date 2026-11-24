@@ -388,6 +388,13 @@ leaves = jax.tree.leaves(out)
 assert leaves and all(x.devices() == {cpu0} for x in leaves)
 assert after == before
 assert staged == [{cpu0}] * len(leaves)
+# A sharding target stages on its own device and needs no other backend.
+jax.devices = lambda *a: (_ for _ in ()).throw(RuntimeError("Unknown backend"))
+staged.clear()
+with jax.default_device(cpu1):
+    out = canonical(tree, device=jax.sharding.SingleDeviceSharding(cpu0))
+assert all(x.devices() == {cpu0} for x in jax.tree.leaves(out))
+assert staged == [{cpu0}] * len(leaves)
 """
 
 
@@ -397,7 +404,9 @@ def test_canonical_places_once_without_staging_on_the_default_device():
     Truth: with two CPU devices and the second as the default, every array
     handed to ``device_put`` must already be on the target device (a leaf built
     on the default device would show there), every output leaf sits on the
-    target, and no buffer remains on the default device. Exact, no tolerance.
+    target, and no buffer remains on the default device. A sharding target
+    stages on its own device without querying another backend (a host started
+    with only an accelerator platform has no CPU backend). Exact, no tolerance.
     A subprocess sets the device count before JAX starts.
     """
     env = dict(os.environ, XLA_FLAGS="--xla_force_host_platform_device_count=2")

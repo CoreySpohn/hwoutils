@@ -531,8 +531,11 @@ def canonical(tree: Any, *, device: Any = None, foreign: Iterable[str] = ()) -> 
     if device is None:
         staging = contextlib.nullcontext()
     else:
-        host = device if isinstance(device, jax.Device) else jax.devices("cpu")[0]
-        staging = jax.default_device(host)
+        if isinstance(device, jax.Device):
+            stage = device
+        else:
+            stage = min(device.device_set, key=lambda d: d.id)
+        staging = jax.default_device(stage)
 
     def convert(path, leaf):
         if stop(leaf) or not _is_number(leaf):
