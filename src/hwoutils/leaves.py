@@ -28,6 +28,7 @@ the host, hashed and compared by a digest, stored on a static field.
 
 import dataclasses
 import hashlib
+import reprlib
 from collections.abc import Callable, Iterable, Iterator
 from typing import Any, NamedTuple
 
@@ -73,13 +74,12 @@ OWNED_PACKAGES = frozenset(
 )
 """Top-level packages whose Modules follow the leaf rule."""
 
-FOREIGN_PACKAGES = frozenset(
-    {"diffrax", "equinox.nn", "interpax", "lineax", "optimistix"}
-)
+FOREIGN_PACKAGES = frozenset({"diffrax", "equinox", "interpax", "lineax", "optimistix"})
 """Third-party packages whose Modules :func:`require_tree` does not enter.
 
-An entry may be a dotted module path: ``equinox.nn`` exempts the neural-network
-layers only, so an ``eqx.Partial`` holding a NumPy array is still flagged."""
+An entry may be a dotted module path. Equinox is exempt as a whole (its
+wrappers such as ``eqx.filter_jit`` and ``eqx.filter_grad``, and ``eqx.nn``)
+except ``eqx.Partial``, which holds user leaves and is entered."""
 
 _PYTHON_NUMBERS = (bool, int, float, complex)
 
@@ -178,7 +178,9 @@ def as_float_leaf(x: Any) -> jax.Array:
         try:
             host = np.asarray(x, dtype=np.float64)
         except (OverflowError, TypeError, ValueError) as err:
-            raise ValueError(f"{x!r} does not fit a float leaf: {err}") from err
+            raise ValueError(
+                f"{reprlib.repr(x)} does not fit a float leaf: {err}"
+            ) from err
         x = host
     with np.errstate(over="ignore"):
         out = jnp.asarray(x, dtype=float_dtype())
@@ -234,7 +236,8 @@ def _check_integer_range(x, target: np.dtype) -> None:
     low, high = values.min(), values.max()
     if low < info.min or high > info.max:
         raise ValueError(
-            f"integer values from {low} to {high} do not fit {target.name}, which "
+            f"integer values from {reprlib.repr(int(low))} to "
+            f"{reprlib.repr(int(high))} do not fit {target.name}, which "
             f"holds {info.min} to {info.max}; enable x64, or store an identifier "
             "that is not an index as static metadata"
         )
@@ -448,6 +451,8 @@ def check_tree(
 
 
 def _is_foreign(module, foreign: frozenset[str]) -> bool:
+    if isinstance(module, eqx.Partial):
+        return False
     name = type(module).__module__
     return any(name == f or name.startswith(f + ".") for f in foreign)
 

@@ -322,10 +322,13 @@ def test_as_float_leaf_refuses_overflow():
 def test_equinox_partial_with_numpy_is_flagged():
     """Exact count basis. Fails if all of equinox is exempt: an ``eqx.Partial``
     holding a NumPy array must be refused by ``require_tree`` (``check_tree``
-    enters owned modules only), while ``eqx.nn.Dropout`` stays accepted."""
+    enters owned modules only), while ``eqx.nn.Dropout`` and the wrappers
+    ``eqx.filter_grad`` and ``eqx.filter_jit`` stay accepted."""
     held = Held(eqx.Partial(print, np.ones(2)))
     with pytest.raises(TypeError, match="ndarray"):
         require_tree(held)
+    require_tree(Held(eqx.filter_grad(lambda x: x)))
+    require_tree(Held(eqx.filter_jit(lambda x: x)))
     assert check_tree(Held(eqx.nn.Dropout(0.5))) == ()
 
 
@@ -342,6 +345,9 @@ def test_converters_refuse_values_that_do_not_fit():
             as_float_leaf(1e-50)
         assert as_float_leaf(0.0) == 0.0
     with jax.enable_x64(True):
+        with pytest.raises(ValueError) as huge:
+            as_float_leaf(2**2000)
+        assert len(str(huge.value)) < 300
         with pytest.raises(ValueError, match="do not fit int64"):
             as_leaf(2**70)
         assert as_float_leaf(2**200) == float(2**200)
