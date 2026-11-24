@@ -54,6 +54,10 @@ with jax.enable_x64(False):
         print(error)
 ```
 
+A nonzero value that would underflow to zero (1e-50 under x32) and a Python integer beyond the float range
+are refused the same way. A typed PRNG key is not a number: `as_leaf` and `as_float_leaf` raise `TypeError`
+for one, so declare a key field without a converter (a key is already a valid leaf).
+
 Tracers pass through unchecked.
 
 ## Check a model
@@ -85,7 +89,7 @@ except TypeError as error:
 The check flags NumPy leaves, Python numbers, weakly typed arrays, and floating or complex arrays whose
 dtype is not the active one (float16 and bfloat16 included). Typed PRNG keys and integer and boolean arrays
 are valid. `check_tree` enters only Modules owned by the workspace libraries; `require_tree` enters every
-Module except those of third-party packages such as Equinox, Diffrax and Interpax, whose own fields are not
+Module except those of third-party packages (the Equinox `nn` layers, Diffrax, Interpax), whose own fields are not
 ours to constrain.
 
 ## Three predicates

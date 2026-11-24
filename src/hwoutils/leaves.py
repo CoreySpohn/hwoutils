@@ -73,8 +73,13 @@ OWNED_PACKAGES = frozenset(
 )
 """Top-level packages whose Modules follow the leaf rule."""
 
-FOREIGN_PACKAGES = frozenset({"diffrax", "equinox", "interpax", "lineax", "optimistix"})
-"""Third-party packages whose Modules :func:`require_tree` does not enter."""
+FOREIGN_PACKAGES = frozenset(
+    {"diffrax", "equinox.nn", "interpax", "lineax", "optimistix"}
+)
+"""Third-party packages whose Modules :func:`require_tree` does not enter.
+
+An entry may be a dotted module path: ``equinox.nn`` exempts the neural-network
+layers only, so an ``eqx.Partial`` holding a NumPy array is still flagged."""
 
 _PYTHON_NUMBERS = (bool, int, float, complex)
 
@@ -119,6 +124,15 @@ def is_traced(x: Any) -> bool:
     return isinstance(x, jax.core.Tracer)
 
 
+def _refuse_key(x, helper: str) -> None:
+    dtype = getattr(x, "dtype", None)
+    if dtype is not None and jax.dtypes.issubdtype(dtype, jax.dtypes.prng_key):
+        raise TypeError(
+            "a typed PRNG key is not a number; declare the field without a "
+            f"converter (a key is already a valid leaf) instead of {helper}"
+        )
+
+
 def _complex_dtype() -> np.dtype:
     return np.dtype(jax.dtypes.canonicalize_dtype(np.complex128))
 
@@ -145,31 +159,53 @@ def as_float_leaf(x: Any) -> jax.Array:
         A strongly typed ``jax.Array`` of ``float_dtype()``.
 
     Raises:
-        TypeError: If ``x`` is complex; use :func:`as_complex_leaf`.
+        TypeError: If ``x`` is complex (use :func:`as_complex_leaf`) or a typed
+            PRNG key (declare the field without a converter).
         ValueError: If a concrete finite ``x`` becomes infinite in the active
-            dtype (a float64 value beyond the float32 range under x32).
+            dtype (a float64 value or a huge Python integer beyond the float32
+            range under x32), or a nonzero finite ``x`` underflows to zero.
             Tracers are not checked.
     """
+    _refuse_key(x, "as_float_leaf")
     source = _source_dtype(x)
     if np.issubdtype(source, np.complexfloating):
         raise TypeError(
             "a complex value cannot be stored on a real field; declare the "
             "field with as_complex_leaf"
         )
+    wide = source == np.dtype(object) and not is_traced(x)
+    if wide:
+        try:
+            host = np.asarray(x, dtype=np.float64)
+        except (OverflowError, TypeError, ValueError) as err:
+            raise ValueError(f"{x!r} does not fit a float leaf: {err}") from err
+        x = host
     with np.errstate(over="ignore"):
         out = jnp.asarray(x, dtype=float_dtype())
     if (
-        np.issubdtype(source, np.floating)
-        and source.itemsize > out.dtype.itemsize
+        (
+            wide
+            or (
+                np.issubdtype(source, np.floating)
+                and source.itemsize > out.dtype.itemsize
+            )
+        )
         and not is_traced(x)
         and not is_traced(out)
     ):
-        overflow = np.isfinite(np.asarray(x)) & ~np.isfinite(np.asarray(out))
-        if overflow.any():
+        host, got = np.asarray(x), np.asarray(out)
+        if (np.isfinite(host) & ~np.isfinite(got)).any():
             raise ValueError(
                 f"finite values do not fit {out.dtype.name}, which holds up to "
                 f"{float(np.finfo(out.dtype).max):.3e}; enable x64, or rescale "
                 "the quantity"
+            )
+        if ((host != 0) & np.isfinite(host) & (got == 0)).any():
+            tiny = float(np.finfo(out.dtype).smallest_subnormal)
+            raise ValueError(
+                f"nonzero values underflow to zero in {out.dtype.name}, whose "
+                f"smallest positive value is {tiny:.3e}; "
+                "enable x64, or rescale the quantity"
             )
     return out
 
@@ -219,10 +255,19 @@ def as_leaf(x: Any) -> jax.Array:
         A strongly typed ``jax.Array`` of the same kind as ``x``.
 
     Raises:
-        ValueError: If a concrete integer does not fit the canonical integer
-            dtype (int32 or uint32 without x64).
+        ValueError: If a concrete integer (a Python integer included) does not
+            fit the canonical integer dtype (int32 or uint32 without x64).
+        TypeError: If ``x`` is a typed PRNG key; declare the field without a
+            converter.
     """
+    _refuse_key(x, "as_leaf")
     source = _source_dtype(x)
+    if source == np.dtype(object) and not is_traced(x):
+        values = np.asarray(x, dtype=object)
+        if values.size and all(isinstance(v, int) for v in values.ravel()):
+            target = np.dtype(jax.dtypes.canonicalize_dtype(np.int64))
+            _check_integer_range(x, target)
+            source = np.dtype(np.int64)
     if source == np.bool_:
         target = np.dtype(np.bool_)
     elif np.issubdtype(source, np.integer):
@@ -403,7 +448,8 @@ def check_tree(
 
 
 def _is_foreign(module, foreign: frozenset[str]) -> bool:
-    return _package(type(module)) in foreign
+    name = type(module).__module__
+    return any(name == f or name.startswith(f + ".") for f in foreign)
 
 
 def require_tree(

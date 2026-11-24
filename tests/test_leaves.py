@@ -319,6 +319,43 @@ def test_as_float_leaf_refuses_overflow():
         assert as_float_leaf(np.array([1e300]))[0] == 1e300
 
 
+def test_equinox_partial_with_numpy_is_flagged():
+    """Exact count basis. Fails if all of equinox is exempt: an ``eqx.Partial``
+    holding a NumPy array must be refused by ``require_tree`` (``check_tree``
+    enters owned modules only), while ``eqx.nn.Dropout`` stays accepted."""
+    held = Held(eqx.Partial(print, np.ones(2)))
+    with pytest.raises(TypeError, match="ndarray"):
+        require_tree(held)
+    assert check_tree(Held(eqx.nn.Dropout(0.5))) == ()
+
+
+def test_converters_refuse_values_that_do_not_fit():
+    """Exact basis: int32 and float32 ranges, float32 smallest subnormal 1.4e-45.
+    Fails if a huge Python integer wraps, overflows to inf or underflows
+    silently under x32, or if x64 refuses what float64 holds."""
+    with jax.enable_x64(False):
+        with pytest.raises(ValueError, match="do not fit int32"):
+            as_leaf(2**70)
+        with pytest.raises(ValueError, match="do not fit"):
+            as_float_leaf(2**200)
+        with pytest.raises(ValueError, match="underflow"):
+            as_float_leaf(1e-50)
+        assert as_float_leaf(0.0) == 0.0
+    with jax.enable_x64(True):
+        with pytest.raises(ValueError, match="do not fit int64"):
+            as_leaf(2**70)
+        assert as_float_leaf(2**200) == float(2**200)
+        assert as_float_leaf(1e-50) == 1e-50
+
+
+def test_converters_name_the_key_refusal(x64):
+    """Exact basis: a typed key has no numeric dtype. Fails if a key crashes
+    with an opaque dtype error instead of a clear TypeError."""
+    for convert in (as_leaf, as_float_leaf):
+        with pytest.raises(TypeError, match="PRNG key"):
+            convert(jax.random.key(0))
+
+
 def test_bfloat16_is_flagged_like_float16(x64):
     """Exact count basis. Fails if a bfloat16 leaf passes as a float."""
     for dtype in (jnp.float16, jnp.bfloat16):
