@@ -9,7 +9,7 @@ which is O(2N * N log N) vs O(N^2 log N^2) for a full 2D FFT.
 
 import jax.numpy as jnp
 import numpy as np
-from jax import lax
+from jax import Array, lax
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -34,20 +34,51 @@ def get_pad_info(image, pad_factor):
     return n_pixels_orig, n_pad, img_edge, n_pixels_final
 
 
+def _reduce_float_shift(shift_pixels, n, xp):
+    if shift_pixels.dtype.itemsize < 4:
+        shift_pixels = shift_pixels.astype(xp.float32)
+    turns = xp.round(shift_pixels / n)
+    # Keep small shifts bit for bit, including signed zero.
+    return xp.where(turns == 0, shift_pixels, shift_pixels - n * turns)
+
+
+def _reduce_integer_shift(shift_pixels, n, dtype, xp):
+    # Reduce full-width unsigned shifts before casting to a signed dtype.
+    if shift_pixels.dtype.kind != "u" or shift_pixels.dtype.itemsize < dtype.itemsize:
+        shift_pixels = shift_pixels.astype(dtype)
+    remainder = xp.fmod(shift_pixels, n).astype(dtype)
+    # The signed remainder preserves both half-period ties and avoids overflow.
+    return xp.where(
+        xp.abs(remainder) <= n // 2, remainder, remainder - xp.sign(remainder) * n
+    )
+
+
 # ---------------------------------------------------------------------------
 # JAX versions (JIT-compatible)
 # ---------------------------------------------------------------------------
 
 
-def fft_shift_x(image, shift_pixels, phasor, clamp=True):
+def _jax_phase_ramp(n, shift_pixels, real_dtype):
+    shift_pixels = jnp.asarray(shift_pixels)
+    if jnp.issubdtype(shift_pixels.dtype, jnp.floating):
+        shift_pixels = _reduce_float_shift(shift_pixels, n, jnp)
+    elif shift_pixels.dtype.kind in "biu":
+        shift_pixels = _reduce_integer_shift(shift_pixels, n, jnp.result_type(int), jnp)
+    freqs = jnp.fft.fftfreq(n, dtype=real_dtype)
+    return jnp.exp(-2j * jnp.pi * freqs * shift_pixels)
+
+
+def fft_shift_x(image, shift_pixels, clamp=True):
     """Apply a Fourier shift along the x-axis (JAX, JIT-compatible).
 
     Rectangular images keep real/complex kind; complex input requires clamp=False.
+    Keep float32 shift magnitudes well below 2**24 times the desired accuracy
+    in pixels (about 1e5 pixels for 0.01-pixel accuracy). Reduce larger shifts
+    modulo the padded period in float64 before calling.
 
     Args:
         image: 2D input image (JAX array).
-        shift_pixels: Sub-pixel shift amount along x.
-        phasor: Legacy argument kept for compatibility and ignored.
+        shift_pixels: Sub-pixel shift along x, reduced modulo the padded period if real.
         clamp: If True, clamp negative values to zero after shift.
 
     Returns:
@@ -64,8 +95,7 @@ def fft_shift_x(image, shift_pixels, phasor, clamp=True):
     padded = lax.pad(image, pad_val, [(n_pad, n_pad, 0), (n_pad, n_pad, 0)])
     padded = jnp.fft.fft(padded, axis=1)
 
-    freqs = jnp.fft.fftfreq(padded.shape[1], dtype=padded.real.dtype)
-    phase_ramp = jnp.exp(-2j * jnp.pi * freqs * shift_pixels)
+    phase_ramp = _jax_phase_ramp(padded.shape[1], shift_pixels, padded.real.dtype)
     padded = padded * phase_ramp
 
     padded = jnp.fft.ifft(padded, axis=1)
@@ -78,15 +108,17 @@ def fft_shift_x(image, shift_pixels, phasor, clamp=True):
     return image
 
 
-def fft_shift_y(image, shift_pixels, phasor, clamp=True):
+def fft_shift_y(image, shift_pixels, clamp=True):
     """Apply a Fourier shift along the y-axis (JAX, JIT-compatible).
 
     Rectangular images keep real/complex kind; complex input requires clamp=False.
+    Keep float32 shift magnitudes well below 2**24 times the desired accuracy
+    in pixels (about 1e5 pixels for 0.01-pixel accuracy). Reduce larger shifts
+    modulo the padded period in float64 before calling.
 
     Args:
         image: 2D input image (JAX array).
-        shift_pixels: Sub-pixel shift amount along y.
-        phasor: Legacy argument kept for compatibility and ignored.
+        shift_pixels: Sub-pixel shift along y, reduced modulo the padded period if real.
         clamp: If True, clamp negative values to zero after shift.
 
     Returns:
@@ -103,8 +135,7 @@ def fft_shift_y(image, shift_pixels, phasor, clamp=True):
     padded = lax.pad(image, pad_val, [(n_pad, n_pad, 0), (n_pad, n_pad, 0)])
     padded = jnp.fft.fft(padded, axis=0)
 
-    freqs = jnp.fft.fftfreq(padded.shape[0], dtype=padded.real.dtype)
-    phase_ramp = jnp.exp(-2j * jnp.pi * freqs * shift_pixels)
+    phase_ramp = _jax_phase_ramp(padded.shape[0], shift_pixels, padded.real.dtype)
     padded = padded * phase_ramp[:, None]
 
     padded = jnp.fft.ifft(padded, axis=0)
@@ -118,39 +149,51 @@ def fft_shift_y(image, shift_pixels, phasor, clamp=True):
 
 
 # ---------------------------------------------------------------------------
-# NumPy versions (standalone, no precomputed phasors needed)
+# NumPy versions
 # ---------------------------------------------------------------------------
 
 
 def fft_shift_1d(image, shift_pixels, axis):
     """Apply a Fourier shift along a specified axis (NumPy).
 
-    Pads, applies a 1D FFT phasor shift, and unpads. Standalone version
-    that computes its own phasor internally.
+    Pads the image, applies a phase ramp in the Fourier domain, and unpads.
     Rectangular images keep the input's real or complex kind.
+    Keep float32 shift magnitudes well below 2**24 times the desired accuracy
+    in pixels (about 1e5 pixels for 0.01-pixel accuracy). Reduce larger shifts
+    modulo the padded period in float64 before calling.
 
     Args:
         image: 2D input image (NumPy array).
-        shift_pixels: Sub-pixel shift amount.
+        shift_pixels: Sub-pixel shift, reduced modulo the padded axis period if real.
         axis: Axis to shift (0 for vertical/y, 1 for horizontal/x).
 
     Returns:
         Shifted image with same shape as input.
     """
-    n_pixels = image.shape[0]
-    n_pad = int(1.5 * n_pixels)
+    _, n_pad, _, _ = get_pad_info(image, 1.5)
     padded = np.pad(image, n_pad, mode="constant")
     padded = np.fft.fft(padded, axis=axis)
 
-    freqs = np.fft.fftfreq(padded.shape[axis])
-    phasor = np.exp(-2j * np.pi * freqs * shift_pixels)
+    n = padded.shape[axis]
+    # A JAX shift also controls promotion in the mixed NumPy/JAX ramp.
+    xp = jnp if isinstance(shift_pixels, Array) else np
+    shift = xp.asarray(shift_pixels)
+    if jnp.issubdtype(shift.dtype, jnp.floating):
+        shift = _reduce_float_shift(shift, n, xp)
+        shift_pixels = shift.item() if type(shift_pixels) is float else shift
+    elif shift.dtype.kind in "biu":
+        shift_pixels = xp.asarray(
+            _reduce_integer_shift(np.asarray(shift), n, np.dtype(np.int64), np)
+        )
+    freqs = np.fft.fftfreq(n)
+    phase_ramp = np.exp(-2j * np.pi * freqs * shift_pixels)
 
     if axis == 1:
-        phasor = np.tile(phasor, (padded.shape[0], 1))
+        phase_ramp = np.tile(phase_ramp, (padded.shape[0], 1))
     else:
-        phasor = np.tile(phasor, (padded.shape[1], 1)).T
+        phase_ramp = np.tile(phase_ramp, (padded.shape[1], 1)).T
 
-    padded = padded * phasor
+    padded = padded * phase_ramp
     padded = np.fft.ifft(padded, axis=axis)
     if not np.iscomplexobj(image):
         padded = np.real(padded)

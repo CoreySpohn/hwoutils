@@ -7,6 +7,7 @@ clamp behavior, and padding arithmetic.
 
 import jax
 import jax.numpy as jnp
+import ml_dtypes
 import numpy as np
 import pytest
 
@@ -45,10 +46,11 @@ def periodic_padding(monkeypatch):
 def _shift(image, shift_pixels, axis, backend):
     if backend == "numpy":
         return fft_shift_1d(image, shift_pixels, axis)
-    _, n_pad, _, _ = get_pad_info(image, 1.5)
-    phasor = jnp.exp(-2j * jnp.pi * jnp.fft.fftfreq(image.shape[axis] + 2 * n_pad))
     func = fft.fft_shift_x if axis == 1 else fft.fft_shift_y
-    return func(jnp.asarray(image), shift_pixels, phasor, clamp=False)
+    return func(jnp.asarray(image), shift_pixels, clamp=False)
+
+
+_shift_jit = jax.jit(_shift, static_argnames=("axis", "backend"))
 
 
 @pytest.mark.parametrize("backend", ["numpy", "jax"])
@@ -80,8 +82,9 @@ def test_real_rectangular_roundtrip_periodic(periodic_padding, backend, shape):
     np.testing.assert_allclose(roundtrip, image, rtol=0, atol=1e-12)
 
 
-def _direct_dft_shift(image, shift_pixels, axis):
-    n_pad = int(1.5 * image.shape[0])
+def _direct_dft_shift(image, shift_pixels, axis, n_pad=None):
+    if n_pad is None:
+        n_pad = int(1.5 * image.shape[0])
     padded = np.pad(image, n_pad)
     n = padded.shape[axis]
     samples = np.arange(n)
@@ -112,13 +115,158 @@ def test_rectangular_zero_padding_direct_dft(backend, axis, complex_input):
     np.testing.assert_allclose(shifted, expected, rtol=0, atol=1e-12)
 
 
+def _unreduced_fft_shift(image, shift_pixels, axis, backend):
+    # The phase ramp and promotion rules at 3f06ce5.
+    xp = np if backend == "numpy" else jnp
+    n_pad = int(1.5 * image.shape[0])
+    padded = xp.pad(xp.asarray(image), n_pad)
+    spectrum = xp.fft.fft(padded, axis=axis)
+    n = padded.shape[axis]
+    freqs = (
+        np.fft.fftfreq(n)
+        if backend == "numpy"
+        else jnp.fft.fftfreq(n, dtype=spectrum.real.dtype)
+    )
+    ramp = xp.exp(-2j * xp.pi * freqs * shift_pixels)
+    if axis == 0:
+        ramp = ramp[:, None]
+    shifted = xp.fft.ifft(spectrum * ramp, axis=axis).real
+    return shifted[n_pad:-n_pad, n_pad:-n_pad]
+
+
+@pytest.mark.parametrize("backend", ["numpy", "jax"])
+@pytest.mark.parametrize("axis", [0, 1], ids=["y", "x"])
+@pytest.mark.parametrize(
+    "shift_pixels",
+    [np.float64(-0.37), np.complex128(0.37 + 0.25j)],
+    ids=["float64", "complex128"],
+)
+def test_strong_shift_matches_head(axis, backend, shift_pixels):
+    image = np.arange(42, dtype=np.float32).reshape(6, 7)
+    with jax.enable_x64():
+        expected = _unreduced_fft_shift(image, shift_pixels, axis, backend)
+        shifted = _shift(image, shift_pixels, axis, backend)
+
+    assert shifted.dtype == expected.dtype == np.float64
+    np.testing.assert_array_equal(shifted, expected)
+
+
+@pytest.mark.parametrize("shape", [(), (1,)], ids=["scalar", "vector"])
+def test_numpy_jax_float32_shift_matches_head(shape):
+    image = np.arange(42, dtype=np.float32).reshape(6, 7)
+    with jax.enable_x64(False):
+        shift_pixels = jnp.full(shape, -0.37, dtype=jnp.float32)
+        expected = _unreduced_fft_shift(image, shift_pixels, 1, "numpy")
+        shifted = fft_shift_1d(image, shift_pixels, axis=1)
+
+    assert shifted.dtype == expected.dtype == np.float32
+    np.testing.assert_array_equal(shifted, expected)
+
+
+@pytest.mark.parametrize(
+    "shift_pixels",
+    [
+        np.int8(1),
+        np.int8(-1),
+        np.int8(-128),
+        np.int32(1),
+        np.int32(-1),
+        np.bool_(True),
+        np.float32(-0.37),
+    ],
+    ids=[
+        "int8",
+        "negative-int8",
+        "int8-negative-half-period",
+        "int32",
+        "negative-int32",
+        "bool",
+        "negative-float32",
+    ],
+)
+@pytest.mark.parametrize("backend", ["numpy", "jax"])
+@pytest.mark.parametrize("axis", [0, 1], ids=["y", "x"])
+def test_small_shift_direct_dft(axis, backend, shift_pixels):
+    # Both padded lengths are 256, which exceeds the int8 range.
+    image = np.zeros((64, 64), dtype=np.float32)
+    image[32, 32] = 1.0
+    expected = _direct_dft_shift(image.astype(np.float64), float(shift_pixels), axis)
+
+    shift = _shift_jit if backend == "jax" else _shift
+    with jax.enable_x64(False):
+        shifted = shift(image, shift_pixels, axis, backend)
+
+    assert shifted.dtype == (np.float32 if backend == "jax" else np.float64)
+    # Keep the float32 phase error for int8(-1) near the unreduced baseline.
+    atol = 1e-7 if shift_pixels.dtype == np.int8 and shift_pixels == -1 else 1e-6
+    np.testing.assert_allclose(shifted, expected, rtol=0, atol=atol)
+
+
+@pytest.mark.parametrize("backend", ["numpy", "jax"])
+@pytest.mark.parametrize(
+    "shift_pixels",
+    [np.float16(2074), ml_dtypes.bfloat16(276)],
+    ids=["float16", "bfloat16"],
+)
+def test_half_precision_shift_direct_dft(backend, shift_pixels):
+    # The padded x length is 25. Reducing in half precision loses a pixel.
+    image = np.zeros((6, 7), dtype=np.float32)
+    image[2, 3] = 1.0
+    expected = _direct_dft_shift(image.astype(np.float64), float(shift_pixels), axis=1)
+
+    with jax.enable_x64(False):
+        shifted = _shift(image, shift_pixels, axis=1, backend=backend)
+
+    np.testing.assert_allclose(shifted, expected, rtol=0, atol=1e-6)
+
+
+@pytest.mark.parametrize("backend", ["numpy", "jax"])
+@pytest.mark.parametrize("axis", [0, 1], ids=["y", "x"])
+def test_large_int32_shift_direct_dft(axis, backend, monkeypatch):
+    image = np.zeros((7, 6) if axis == 0 else (6, 7), dtype=np.float32)
+    image[2, 3] = 1.0
+    if axis == 0:
+        # Default symmetric padding cannot give a y length of 25.
+        monkeypatch.setattr(
+            fft, "get_pad_info", lambda image, _: get_pad_info(image, 1.3)
+        )
+    shift_pixels = np.int32(16777226)
+    expected = _direct_dft_shift(
+        image.astype(np.float64), float(shift_pixels), axis, n_pad=9
+    )
+
+    shift = _shift_jit if backend == "jax" else _shift
+    with jax.enable_x64(False):
+        shifted = shift(image, shift_pixels, axis, backend)
+
+    np.testing.assert_allclose(shifted, expected, rtol=0, atol=1e-6)
+
+
+@pytest.mark.parametrize("backend", ["numpy", "jax"])
+@pytest.mark.parametrize("axis", [0, 1], ids=["y", "x"])
+@pytest.mark.parametrize("shape", [(6, 7), (7, 8)], ids=["divisible", "nondivisible"])
+def test_large_float32_shift_direct_dft(axis, backend, shape):
+    # The padded lengths 24 and 25 divide 39000, while 27 and 28 do not.
+    image = np.zeros(shape, dtype=np.float32)
+    image[3, 3] = 1.0
+    shift_pixels = np.float32(39000.5)
+    expected = _direct_dft_shift(image.astype(np.float64), float(shift_pixels), axis)
+
+    shift = _shift_jit if backend == "jax" else _shift
+    with jax.enable_x64(False):
+        shifted = shift(image, shift_pixels, axis, backend)
+
+    assert shifted.dtype == (np.float32 if backend == "jax" else np.float64)
+    np.testing.assert_allclose(shifted, expected, rtol=0, atol=1e-6)
+
+
 @pytest.mark.parametrize("backend", ["numpy", "jax"])
 @pytest.mark.parametrize("axis", [0, 1], ids=["y", "x"])
 def test_complex64_nyquist_half_pixel_shift(backend, axis):
     coordinate = np.indices((32, 48))[axis]
     image = ((-1) ** coordinate).astype(np.complex64)
     expected = _direct_dft_shift(image, 0.5, axis)
-    # Force the legacy unit phasor to use float32 frequencies at Nyquist.
+    # Evaluate the JAX phase ramp in float32 at Nyquist.
     with jax.enable_x64(False):
         shifted = _shift(image, 0.5, axis, backend)
     assert shifted.shape == image.shape
@@ -138,9 +286,8 @@ def test_two_axis_complex_wave_periodic(periodic_padding):
 
 @pytest.mark.parametrize("func", [fft.fft_shift_x, fft.fft_shift_y])
 def test_complex_clamp_rejected_on_host(func):
-    # No phasor is needed: reject the dtype before any FFT is dispatched.
     with pytest.raises(TypeError, match="Cannot clamp a complex image"):
-        func(jnp.ones((32, 48), dtype=jnp.complex64), 2.5, None)
+        func(jnp.ones((32, 48), dtype=jnp.complex64), 2.5)
 
 
 @pytest.mark.parametrize("backend", ["numpy", "jax"])
@@ -170,8 +317,7 @@ def test_real_square_matches_base(gaussian_psf, backend, axis):
             # Direct exponentiation changes floating-point rounding in JAX.
             np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-15)
             func = fft.fft_shift_x if axis == 1 else fft.fft_shift_y
-            phasor = xp.exp(-2j * xp.pi * freqs)
-            clamped = func(image, 1.25, phasor)
+            clamped = func(image, 1.25)
             np.testing.assert_allclose(
                 clamped, xp.maximum(expected, 0.0), rtol=0, atol=1e-15
             )
@@ -271,12 +417,8 @@ class TestPositivityClamp:
 
         with jax.enable_x64():
             psf = jnp.array(gaussian_psf, dtype=jnp.float64)
-            _, _, _, n_final = get_pad_info(psf, 1.5)
-            kx = jnp.fft.fftfreq(n_final)
-            phasor = jnp.exp(-2j * jnp.pi * kx)
-
-            unclamped = np.array(fft_shift_x(psf, 0.37, phasor, clamp=False))
-            clamped = np.array(fft_shift_x(psf, 0.37, phasor, clamp=True))
+            unclamped = np.array(fft_shift_x(psf, 0.37, clamp=False))
+            clamped = np.array(fft_shift_x(psf, 0.37, clamp=True))
 
         total_energy = np.sum(unclamped**2)
         neg_mask = unclamped < 0
@@ -305,10 +447,7 @@ class TestParsevalTheorem:
             psf = jnp.array(gaussian_psf, dtype=jnp.float64)
             energy_before = float(jnp.sum(psf**2))
 
-            _, _, _, n_final = get_pad_info(psf, 1.5)
-            kx = jnp.fft.fftfreq(n_final)
-            phasor = jnp.exp(-2j * jnp.pi * kx)
-            shifted = fft_shift_x(psf, 0.37, phasor, clamp=False)
+            shifted = fft_shift_x(psf, 0.37, clamp=False)
             energy_after = float(jnp.sum(shifted**2))
 
         np.testing.assert_allclose(
@@ -329,10 +468,7 @@ class TestParsevalTheorem:
             psf = jnp.array(gaussian_psf, dtype=jnp.float64)
             energy_before = float(jnp.sum(psf**2))
 
-            _, _, _, n_final = get_pad_info(psf, 1.5)
-            kx = jnp.fft.fftfreq(n_final)
-            phasor = jnp.exp(-2j * jnp.pi * kx)
-            shifted = fft_shift_x(psf, 0.37, phasor, clamp=True)
+            shifted = fft_shift_x(psf, 0.37, clamp=True)
             energy_after = float(jnp.sum(shifted**2))
 
         loss = 1.0 - energy_after / energy_before
@@ -351,17 +487,11 @@ class TestFloat32VsFloat64:
         from hwoutils.fft import fft_shift_x
 
         psf_f32 = jnp.array(gaussian_psf, dtype=jnp.float32)
-        _, _, _, n_final = get_pad_info(psf_f32, 1.5)
-        kx_f32 = jnp.fft.fftfreq(n_final)
-        phasor_f32 = jnp.exp(-2j * jnp.pi * kx_f32)
-        result_f32 = np.array(fft_shift_x(psf_f32, 0.37, phasor_f32))
+        result_f32 = np.array(fft_shift_x(psf_f32, 0.37))
 
         with jax.enable_x64():
             psf_f64 = jnp.array(gaussian_psf, dtype=jnp.float64)
-            _, _, _, n_final_64 = get_pad_info(psf_f64, 1.5)
-            kx_f64 = jnp.fft.fftfreq(n_final_64)
-            phasor_f64 = jnp.exp(-2j * jnp.pi * kx_f64)
-            result_f64 = np.array(fft_shift_x(psf_f64, 0.37, phasor_f64))
+            result_f64 = np.array(fft_shift_x(psf_f64, 0.37))
 
         peak = np.max(np.abs(result_f64))
         max_diff = np.max(np.abs(result_f64 - result_f32.astype(np.float64)))
