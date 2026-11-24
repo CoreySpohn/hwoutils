@@ -222,6 +222,8 @@ def test_host_grid_identity():
         a.values[0] = 1.0
     values[0] = 1.0
     assert a.values[0] == 400.0
+    assert np.asarray(a) is a.values
+    assert np.asarray(a, dtype=np.float32).dtype == np.float32
     with pytest.raises(TypeError, match="concrete"):
         jax.jit(lambda x: HostGrid(x).digest)(jnp.ones(2))
 

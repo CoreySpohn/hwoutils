@@ -557,6 +557,25 @@ class HostGrid:
             self._values, dtype=float_dtype() if dtype is None else dtype
         )
 
+    def __array__(self, dtype=None, copy=None) -> np.ndarray:
+        """Return the values for ``np.asarray``, read-only unless copied.
+
+        Args:
+            dtype: Requested dtype; the stored float64 when None.
+            copy: NumPy's copy request: True always copies, False never does.
+
+        Returns:
+            The values as a NumPy array.
+
+        Raises:
+            ValueError: If ``copy`` is False and ``dtype`` needs a cast.
+        """
+        if dtype is None or np.dtype(dtype) == self._values.dtype:
+            return self._values.copy() if copy else self._values
+        if copy is False:
+            raise ValueError("changing the dtype of a host grid needs a copy")
+        return self._values.astype(dtype)
+
     def __len__(self) -> int:
         """Return the number of values.
 
