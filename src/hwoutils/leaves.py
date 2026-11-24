@@ -615,5 +615,5 @@ class HostGrid:
             The representation.
         """
         v = self._values
-        span = f"{v[0]!r} to {v[-1]!r}" if v.size else "empty"
+        span = f"{float(v[0])!r} to {float(v[-1])!r}" if v.size else "empty"
         return f"{type(self).__name__}({v.size} values, {span}, {self.digest})"
