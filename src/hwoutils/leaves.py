@@ -509,9 +509,9 @@ def canonical(tree: Any, *, device: Any = None, foreign: Iterable[str] = ()) -> 
     Args:
         tree: Any pytree.
         device: Device or sharding to place the leaves on; the default device
-            when None. Given, each leaf is converted on the host (on that
-            device when it is a single device, else on the first CPU device)
-            and placed once, so nothing is staged on the default device.
+            when None. Given, each leaf is converted on that device (on the
+            lowest-id device of a sharding) and placed once, so nothing is
+            staged on the default device and no other backend is needed.
         foreign: Extra third-party package names whose Modules are kept as is.
 
     Returns:
