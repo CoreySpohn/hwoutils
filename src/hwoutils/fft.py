@@ -45,6 +45,7 @@ def fft_shift_x(image, shift_pixels, phasor, clamp=True):
 
     Uses a precomputed phasor for efficient repeated shifts of images
     with the same shape.
+    Rectangular images keep real/complex kind; complex input requires clamp=False.
 
     Args:
         image: 2D input image (JAX array).
@@ -54,8 +55,13 @@ def fft_shift_x(image, shift_pixels, phasor, clamp=True):
 
     Returns:
         Shifted image with same shape as input.
+
+    Raises:
+        TypeError: If clamp is True and image is complex.
     """
-    _n_pixels_orig, n_pad, img_edge, _n_pixels_final = get_pad_info(image, 1.5)
+    if clamp and jnp.iscomplexobj(image):
+        raise TypeError("Cannot clamp a complex image; use clamp=False.")
+    _n_pixels_orig, n_pad, _img_edge, _n_pixels_final = get_pad_info(image, 1.5)
 
     pad_val = jnp.zeros((), dtype=image.dtype)
     padded = lax.pad(image, pad_val, [(n_pad, n_pad, 0), (n_pad, n_pad, 0)])
@@ -64,8 +70,10 @@ def fft_shift_x(image, shift_pixels, phasor, clamp=True):
     phasor = jnp.tile(phasor**shift_pixels, (padded.shape[0], 1))
     padded = padded * phasor
 
-    padded = jnp.real(jnp.fft.ifft(padded, axis=1))
-    image = padded[n_pad:img_edge, n_pad:img_edge]
+    padded = jnp.fft.ifft(padded, axis=1)
+    if not jnp.iscomplexobj(image):
+        padded = jnp.real(padded)
+    image = padded[n_pad : n_pad + image.shape[0], n_pad : n_pad + image.shape[1]]
 
     if clamp:
         return jnp.maximum(image, 0.0)
@@ -77,6 +85,7 @@ def fft_shift_y(image, shift_pixels, phasor, clamp=True):
 
     Uses a precomputed phasor for efficient repeated shifts of images
     with the same shape.
+    Rectangular images keep real/complex kind; complex input requires clamp=False.
 
     Args:
         image: 2D input image (JAX array).
@@ -86,8 +95,13 @@ def fft_shift_y(image, shift_pixels, phasor, clamp=True):
 
     Returns:
         Shifted image with same shape as input.
+
+    Raises:
+        TypeError: If clamp is True and image is complex.
     """
-    _n_pixels_orig, n_pad, img_edge, _n_pixels_final = get_pad_info(image, 1.5)
+    if clamp and jnp.iscomplexobj(image):
+        raise TypeError("Cannot clamp a complex image; use clamp=False.")
+    _n_pixels_orig, n_pad, _img_edge, _n_pixels_final = get_pad_info(image, 1.5)
 
     pad_val = jnp.zeros((), dtype=image.dtype)
     padded = lax.pad(image, pad_val, [(n_pad, n_pad, 0), (n_pad, n_pad, 0)])
@@ -96,8 +110,10 @@ def fft_shift_y(image, shift_pixels, phasor, clamp=True):
     phasor = jnp.tile(phasor**shift_pixels, (padded.shape[1], 1)).T
     padded = padded * phasor
 
-    padded = jnp.real(jnp.fft.ifft(padded, axis=0))
-    image = padded[n_pad:img_edge, n_pad:img_edge]
+    padded = jnp.fft.ifft(padded, axis=0)
+    if not jnp.iscomplexobj(image):
+        padded = jnp.real(padded)
+    image = padded[n_pad : n_pad + image.shape[0], n_pad : n_pad + image.shape[1]]
 
     if clamp:
         return jnp.maximum(image, 0.0)
@@ -114,6 +130,7 @@ def fft_shift_1d(image, shift_pixels, axis):
 
     Pads, applies a 1D FFT phasor shift, and unpads. Standalone version
     that computes its own phasor internally.
+    Rectangular images keep the input's real or complex kind.
 
     Args:
         image: 2D input image (NumPy array).
@@ -137,7 +154,9 @@ def fft_shift_1d(image, shift_pixels, axis):
         phasor = np.tile(phasor, (padded.shape[1], 1)).T
 
     padded = padded * phasor
-    padded = np.real(np.fft.ifft(padded, axis=axis))
+    padded = np.fft.ifft(padded, axis=axis)
+    if not np.iscomplexobj(image):
+        padded = np.real(padded)
     return padded[n_pad : n_pad + image.shape[0], n_pad : n_pad + image.shape[1]]
 
 
@@ -145,6 +164,7 @@ def fft_shift(image, x=0, y=0):
     """Apply Fourier shifts along x and/or y axes (NumPy).
 
     Convenience wrapper that calls fft_shift_1d for each non-zero axis.
+    Rectangular images keep the input's real or complex kind.
 
     Args:
         image: 2D input image (NumPy array).
