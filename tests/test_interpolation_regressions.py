@@ -11,13 +11,6 @@ from hwoutils.map_coordinates import map_coordinates
 from hwoutils.transforms import resample_flux
 
 
-@pytest.fixture(autouse=True)
-def enable_x64():
-    """Use float64 when comparing two independent polynomial evaluations."""
-    with jax.enable_x64():
-        yield
-
-
 def keys_reference(image, coords, cval):
     """Evaluate the original piecewise Keys polynomial with NumPy stencils."""
     result = np.zeros(np.broadcast_shapes(*(c.shape for c in coords)))
@@ -44,6 +37,7 @@ def keys_reference(image, coords, cval):
     return result
 
 
+@pytest.mark.float64_only(reason="Independent Keys polynomial reference at rtol=1e-12")
 def test_optimized_cubic_matches_piecewise_reference():
     """Polynomial factoring must preserve the 16-tap stencil at boundaries."""
     rng = np.random.default_rng(0)
@@ -74,6 +68,7 @@ def test_singleton_mirror_axis():
     np.testing.assert_allclose(actual, 7, atol=1e-14)
 
 
+@pytest.mark.float64_only(reason="Float64 coordinates with a float32 image")
 def test_coordinate_precision_does_not_promote_image_output():
     """High precision coordinates must not double a float32 image's storage."""
     source = jnp.array([0.0, 10.0, 20.0], dtype=jnp.float32)
@@ -82,6 +77,7 @@ def test_coordinate_precision_does_not_promote_image_output():
     np.testing.assert_allclose(actual, [6.0])
 
 
+@pytest.mark.float64_only(reason="Finite differences at h=1e-4")
 def test_resampler_angle_gradient_at_zero():
     """Optimizing unrotated evaluation must preserve the infinitesimal rotation."""
     y, x = jnp.mgrid[:32, :32]

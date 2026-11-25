@@ -12,62 +12,58 @@ import pytest
 import hwoutils
 
 
-@pytest.mark.parametrize("x64", [False, True])
-def test_owner_precision(x64):
+def test_owner_precision(precision):
     """Fails if a complex partner, index, or metadata changes owner precision."""
-    with jax.enable_x64(x64):
-        real = np.float64 if x64 else np.float32
-        partner = np.complex128 if x64 else np.complex64
-        tree = {
-            "field": jnp.ones(2, partner),
-            "index": jnp.int32(1),
-            "metadata": ("a", np.float32),
-        }
-        assert hwoutils.float_dtype() == real
-        assert hwoutils.precision_of(tree) == real
-        assert hwoutils.complex_of(real) == partner
-        host = (np.ones(1, np.float32 if x64 else np.float64), 1.0, jnp.asarray(1.0))
-        assert hwoutils.precision_of(host) == real
-        for value in host:
-            assert hwoutils.precision_of((jnp.float32(1), value)) == np.float32
-        with jax.enable_x64(True):
-            tree["other"] = jnp.ones(1, np.float32 if x64 else np.float64)
+    x64 = precision == np.float64
+    real = precision.type
+    partner = np.complex128 if x64 else np.complex64
+    tree = {
+        "field": jnp.ones(2, partner),
+        "index": jnp.int32(1),
+        "metadata": ("a", np.float32),
+    }
+    assert hwoutils.float_dtype() == real
+    assert hwoutils.precision_of(tree) == real
+    assert hwoutils.complex_of(real) == partner
+    host = (np.ones(1, np.float32 if x64 else np.float64), 1.0, jnp.asarray(1.0))
+    assert hwoutils.precision_of(host) == real
+    for value in host:
+        assert hwoutils.precision_of((jnp.float32(1), value)) == np.float32
+    if x64:
+        tree["other"] = jnp.ones(1, np.float32)
         with pytest.raises(hwoutils.PrecisionError, match="canonical"):
             hwoutils.precision_of(tree)
 
 
-@pytest.mark.parametrize("x64", [False, True])
-def test_like_follows_reference(x64):
+def test_like_follows_reference(precision):
     """Fails if host constants widen a narrow owner or lose the imaginary part."""
-    with jax.enable_x64(x64):
-        if not x64:
-            with jax.enable_x64(True):
-                wide_ref = jnp.float64(1)
-            with pytest.raises(hwoutils.PrecisionError, match="x64"):
-                hwoutils.like(1, wide_ref)
-        for real in [np.float32, np.float64] if x64 else [np.float32]:
-            ref = jnp.ones(2, real)
-            c = jax.jit(hwoutils.like)(2 + 3j, ref)
-            r = hwoutils.like([1, 2], c)
-            assert c.dtype == (np.complex64 if real == np.float32 else np.complex128)
-            assert r.dtype == real
-            assert c == 2 + 3j
-            np.testing.assert_array_equal(r, [1, 2])
+    x64 = precision == np.float64
+    if not x64:
+        with jax.enable_x64(True):
+            wide_ref = jnp.float64(1)
+        with pytest.raises(hwoutils.PrecisionError, match="x64"):
+            hwoutils.like(1, wide_ref)
+    for real in [np.float32, np.float64] if x64 else [np.float32]:
+        ref = jnp.ones(2, real)
+        c = jax.jit(hwoutils.like)(2 + 3j, ref)
+        r = hwoutils.like([1, 2], c)
+        assert c.dtype == (np.complex64 if real == np.float32 else np.complex128)
+        assert r.dtype == real
+        assert c == 2 + 3j
+        np.testing.assert_array_equal(r, [1, 2])
 
 
-@pytest.mark.parametrize("x64", [False, True])
-def test_float64_refusal(x64):
+def test_float64_refusal(precision):
     """Fails if an unavailable or narrow owner passes a float64-only entry."""
-    with jax.enable_x64(x64):
-        wide = np.ones(1, np.float64)
-        if x64:
-            hwoutils.require_float64("curvature", wide)
-            hwoutils.require_float64("curvature")
-            remedy = "canonical"
-        else:
-            remedy = "x64"
-        with pytest.raises(hwoutils.PrecisionError, match=f"curvature.*{remedy}"):
-            hwoutils.require_float64("curvature", wide, jnp.float32(2))
+    wide = np.ones(1, np.float64)
+    if precision == np.float64:
+        hwoutils.require_float64("curvature", wide)
+        hwoutils.require_float64("curvature")
+        remedy = "canonical"
+    else:
+        remedy = "x64"
+    with pytest.raises(hwoutils.PrecisionError, match=f"curvature.*{remedy}"):
+        hwoutils.require_float64("curvature", wide, jnp.float32(2))
 
 
 def test_configuration_compatibility():
@@ -81,6 +77,7 @@ assert precision.dtype_tag is jax_config.dtype_tag
 for flag in (True, False):
     jax_config.enable_x64(flag)
     assert precision.float_dtype().itemsize == (8 if flag else 4)
+    assert precision.dtype_tag() == ("f64" if flag else "f32")
 os.environ["JAX_ENABLE_X64"] = "1"
 jax_config.enable_x64(False)
 assert precision.float_dtype().itemsize == 8
