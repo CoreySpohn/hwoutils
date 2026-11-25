@@ -3,9 +3,11 @@
 
 Run ``python -m hwoutils.precision_guard [--enforce] [FILE ...]`` or load
 this module through ``pytest_plugins``. Add ``# precision-ok: <reason>``
-on a finding's line to waive it. Set ``precision_guard_enforce = true`` in
-pytest configuration or pass ``--enforce`` to make findings fail.
+on a finding's line to waive it. For pytest, use ``--precision-guard-enforce``
+or set ``precision_guard_enforce = true`` to make findings fail.
 """
+
+from __future__ import annotations
 
 import argparse
 import ast
@@ -23,6 +25,17 @@ _TOLERANCES = {"atol", "rtol", "tol"}
 _DTYPES = {"float", "complex", "builtins.float", "builtins.complex"}
 _DTYPES |= {"jax.numpy.float64", "jax.numpy.complex128"}
 _DTYPES |= {"numpy.float64", "numpy.complex128"}
+_BLOCKS = (
+    ast.If,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.With,
+    ast.AsyncWith,
+    ast.Try,
+    ast.ClassDef,
+    *(getattr(ast, name) for name in ("TryStar", "Match") if hasattr(ast, name)),
+)
 _FLAG_ATTRS = {"jax.config.jax_enable_x64", "jax.config.x64_enabled"}
 _FLAG_SETTERS = {
     "jax.enable_x64",
@@ -98,13 +111,19 @@ def _literal(node, value):
     return isinstance(node, ast.Constant) and node.value == value
 
 
+def _numeric_literal(node):
+    return isinstance(node, ast.Constant) and isinstance(
+        node.value, (int, float, complex)
+    )
+
+
 def _small_float(node):
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
         node = node.operand
     return (
         isinstance(node, ast.Constant)
         and isinstance(node.value, float)
-        and abs(node.value) <= 1e-5  # precision-ok: threshold for this source rule
+        and 0 < abs(node.value) <= 1e-5  # precision-ok: threshold for this source rule
     )
 
 
@@ -117,6 +136,7 @@ class _Guard(ast.NodeVisitor):
         self.flag_owner = scope == "src" and parts == ("hwoutils", "precision.py")
         self.deferred = 0
         self.hits = set()
+        self.numpy_names = set()
         self.small_constants = set()
         for stmt in tree.body:
             if isinstance(stmt, ast.Assign):
@@ -188,6 +208,20 @@ class _Guard(ast.NodeVisitor):
             for part in ast.iter_child_nodes(value):
                 self._tolerance(part, call)
 
+    def _numpy_value(self, node):
+        if isinstance(node, ast.Name):
+            return node.id in self.numpy_names
+        if isinstance(node, ast.Call):
+            return self._qualified(node.func).startswith("numpy.")
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            return self._numpy_value(node.operand)
+        if isinstance(node, ast.BinOp):
+            left, right = self._numpy_value(node.left), self._numpy_value(node.right)
+            return (left and (right or _numeric_literal(node.right))) or (
+                right and _numeric_literal(node.left)
+            )
+        return False
+
     def _jax_dtype_call(self, node, func):
         if func.startswith("jax.numpy."):
             return True
@@ -197,11 +231,42 @@ class _Guard(ast.NodeVisitor):
             or func.startswith("numpy.")
         ):
             return False
-        receiver = node.func.value
-        return not (
-            isinstance(receiver, ast.Call)
-            and self._qualified(receiver.func).startswith("numpy.")
+        return not self._numpy_value(node.func.value)
+
+    def visit_Assign(self, node: ast.Assign | ast.AnnAssign) -> None:
+        host_value = self._numpy_value(node.value)
+        self.generic_visit(node)
+        if host_value:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            self.numpy_names.update(
+                target.id for target in targets if isinstance(target, ast.Name)
+            )
+
+    visit_AnnAssign = visit_Assign
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, (ast.Store, ast.Del)):
+            self.numpy_names.discard(node.id)
+
+    def generic_visit(self, node: ast.AST) -> None:
+        if not isinstance(node, _BLOCKS):
+            super().generic_visit(node)
+            return
+        # A binding inside a block may never run. Do not carry it to other blocks.
+        outer = self.numpy_names
+        outer.difference_update(
+            part.id
+            for part in ast.walk(node)
+            if isinstance(part, ast.Name) and isinstance(part.ctx, (ast.Store, ast.Del))
         )
+        for _, value in ast.iter_fields(node):
+            self.numpy_names = outer.copy()
+            for child in value if isinstance(value, list) else [value]:
+                if isinstance(child, ast.AST):
+                    if not isinstance(child, ast.stmt):
+                        self.numpy_names = outer.copy()
+                    self.visit(child)
+        self.numpy_names = outer
 
     def visit_Call(self, node: ast.Call) -> None:
         func = self._qualified(node.func)
@@ -253,11 +318,17 @@ class _Guard(ast.NodeVisitor):
         # Default arguments and decorators can run at import time.
         for field, child in ast.iter_fields(node):
             nodes = child if isinstance(child, list) else [child]
+            outer = self.numpy_names
+            if field == "body":
+                self.numpy_names = set()
             self.deferred += field == "body"
             for part in nodes:
                 if isinstance(part, ast.AST):
                     self.visit(part)
             self.deferred -= field == "body"
+            self.numpy_names = outer
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            self.numpy_names.discard(node.name)
 
     visit_AsyncFunctionDef = visit_FunctionDef
     visit_Lambda = visit_FunctionDef
@@ -363,7 +434,9 @@ def pytest_addoption(parser):
     """
     group = parser.getgroup("precision guard")
     group.addoption(
-        "--enforce", action="store_true", help="Fail on precision findings."
+        "--precision-guard-enforce",
+        action="store_true",
+        help="Fail on precision findings.",
     )
     parser.addini(
         "precision_guard_enforce",
@@ -387,9 +460,9 @@ def pytest_configure(config):
             hits = scan(_tracked_python(self.config.rootpath))
             if hits:
                 message = _format_hits(hits)
-                if self.config.getoption("enforce") or self.config.getini(
+                if self.config.getoption(
                     "precision_guard_enforce"
-                ):
+                ) or self.config.getini("precision_guard_enforce"):
                     pytest.fail(message, pytrace=False)
                 self.add_report_section("call", "precision guard", message)
 

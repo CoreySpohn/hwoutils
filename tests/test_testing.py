@@ -43,9 +43,13 @@ def test_precision_closed_checks_nested_intermediates(narrow_dtype, wide_dtype):
 
 
 def test_precision_closed_checks_equation_free_output():
-    """Fails if a returned wide literal escapes an equation-only walk."""
-    with jax.enable_x64(), pytest.raises(AssertionError, match="float64"):
-        assert_precision_closed(lambda x: 1.0, jax.ShapeDtypeStruct((), np.float32))
+    """Fails if wide array outputs escape or static metadata is flagged."""
+    x = jax.ShapeDtypeStruct((), np.float32)
+    with jax.enable_x64():
+        assert_precision_closed(lambda v: (v, {"scale": 1.0, "phase": 1j}), x)
+        wide = jnp.asarray(1.0)
+        with pytest.raises(AssertionError, match="float64"):
+            assert_precision_closed(lambda v: wide, x)
 
 
 @pytest.mark.parametrize("as_array", [True, False])
@@ -59,3 +63,21 @@ def test_precision_pair_enforces_relative_bound(as_array):
         precision_pair(lambda tree: tree["value"] * 1024, args, bound=2**-24)
         with pytest.raises(AssertionError, match="relative"):
             precision_pair(lambda tree: tree["value"] * 1024, args, bound=2**-26)
+
+
+def test_precision_pair_uses_a_scale_for_near_zeros():
+    """Float32 sine at a null is compared at the scale of its output leaf."""
+    bound = 2**-23
+    with jax.enable_x64():
+        null = jnp.asarray(jnp.pi)
+        samples = jnp.stack((null, null / 2))
+        precision_pair(jnp.sin, (samples,), bound=bound)
+        precision_pair(jnp.sin, (null,), bound=bound, scale=1.0)
+        with pytest.raises(AssertionError, match="relative"):
+            precision_pair(jnp.sin, (null,), bound=bound)
+        with pytest.raises(AssertionError, match=r"\['null'\].*relative"):
+            precision_pair(
+                lambda x: {"null": jnp.sin(x[0]), "peak": jnp.sin(x[1])},
+                (samples,),
+                bound=bound,
+            )

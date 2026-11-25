@@ -47,6 +47,9 @@ test = [
 [project.scripts]
 testbudget = "hwoutils.testbudget.cli:main"
 
+[project.entry-points.pytest11]
+"hwoutils.testing.precision" = "hwoutils.testing.precision"
+
 [project.urls]
 Homepage = "https://github.com/CoreySpohn/hwoutils"
 Issues = "https://github.com/CoreySpohn/hwoutils/issues"

@@ -1,15 +1,14 @@
-"""Select one JAX precision before test collection.
+"""Select one JAX precision before initial conftests import.
 
-Load with `pytest_plugins = ["hwoutils.testing.precision"]` in the initial
-conftest. Import the package under test from test modules or fixtures so that
-its import runs after pytest has configured the lane.
+Pytest loads this plugin through its installed entry point. Use
+``-p hwoutils.testing.precision`` when automatic discovery is unavailable.
 """
+
+from importlib.util import find_spec
 
 import numpy as np
 import pytest
 from _pytest.junitxml import xml_key
-
-from hwoutils.precision import enable_x64
 
 _LANES = ("float32", "float64")
 _LANE = pytest.StashKey[str]()
@@ -28,18 +27,38 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini("default_precision", "Default JAX precision lane.", default="float32")
 
 
+def _configure_lane(config: pytest.Config, option: str | None) -> None:
+    lane = option or config.getini("default_precision")
+    if lane not in _LANES:
+        raise pytest.UsageError("default_precision must be float32 or float64.")
+    if find_spec("jax") is not None:
+        from hwoutils.precision import enable_x64
+
+        enable_x64(lane == "float64", use_env=False)  # precision-ok: pytest lane setup
+    elif lane == "float64":
+        raise pytest.UsageError("The float64 lane requires JAX. Install hwoutils[jax].")
+    config.stash[_LANE] = lane
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_load_initial_conftests(early_config: pytest.Config) -> None:
+    """Select the lane before conftests can construct any arrays.
+
+    Args:
+        early_config: Pytest configuration after the preliminary option parse.
+    """
+    _configure_lane(early_config, early_config.known_args_namespace.precision)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """Configure JAX before test modules can construct any arrays.
+    """Register the lane markers and support conftest-based plugin loading.
 
     Args:
         config: Pytest run configuration.
     """
-    lane = config.getoption("precision") or config.getini("default_precision")
-    if lane not in _LANES:
-        raise pytest.UsageError("default_precision must be float32 or float64.")
-    config.stash[_LANE] = lane
-    enable_x64(lane == "float64", use_env=False)  # precision-ok: pytest lane setup
+    if _LANE not in config.stash:
+        _configure_lane(config, config.getoption("precision"))
     for lane_name in _LANES:
         config.addinivalue_line(
             "markers", f"{lane_name}_only(reason): collect only in the {lane_name} lane"

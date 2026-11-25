@@ -54,8 +54,23 @@ d = a.astype(complex)
 e = np.array([1], dtype=float)
 f = jn.array([1], dtype=jn.float32)
 g = np.asarray([1]).astype(float)
+h = np.array([1]).astype(complex)
+i = np.fft.fftfreq(3)
+k = (1 - i**2).astype(complex)
+j: np.ndarray = np.asarray([1])
+j.astype(float)
+j = jn.asarray([1])
+j.astype(float)
+def use_unknown(j):
+    return j.astype(float)
+jn.asarray([1]).astype(float)
+def conditional_cast(x, condition):
+    if condition:
+        x = np.asarray(x)
+        x.astype(complex)
+    return x.astype(float)
 """,
-            ["jnp-dtype"] * 4,
+            ["jnp-dtype"] * 8,
         ),
         (
             "src/example.py",
@@ -74,8 +89,11 @@ d = near(a, b, 0, 0)
 e = near(a, b, within, atol=0)
 f = isclose(a, b, ulps=4)
 g = near(a, b, 1e-8, 0)
+if x > 0.0:
+    h = near(a, b, rtol=0, atol=0.0)
+i = near(a, b, rtol=0, atol=1e-10)
 """,
-            ["small-tolerance"] * 4 + ["default-close", "small-tolerance"],
+            ["small-tolerance"] * 4 + ["default-close"] + ["small-tolerance"] * 2,
         ),
         (
             "tests/test_sample.py",
@@ -155,7 +173,10 @@ def test_pytest_guard_modes(pytester, monkeypatch):
     result = pytester.runpytest_inprocess()
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(["*some_module.py:2: jnp-dtype*"])
-    for flags in [("--enforce",), ("-o", "precision_guard_enforce=true")]:
+    for flags in [
+        ("--precision-guard-enforce",),
+        ("-o", "precision_guard_enforce=true"),
+    ]:
         result = pytester.runpytest_inprocess(*flags)
         result.assert_outcomes(failed=1)
         result.stdout.fnmatch_lines(["*some_module.py:2: jnp-dtype*"])
