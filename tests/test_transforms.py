@@ -1,13 +1,9 @@
 """Tests for hwoutils.transforms -- image and coordinate transforms."""
 
-import jax
+import jax.numpy as jnp
 import pytest
 
-jax.config.update("jax_enable_x64", True)
-
-import jax.numpy as jnp  # noqa: E402
-
-from hwoutils.transforms import (  # noqa: E402
+from hwoutils.transforms import (
     ccw_rotation_matrix,
     resample_flux,
     rotate_image,
@@ -164,6 +160,9 @@ class TestResampleFluxKeys:
             (11, 0.0859375, 0.15625, 5.0, 106.79577547363107),
         ],
     )
+    @pytest.mark.float64_only(
+        reason="Stored truncated Gaussian flux reference at rtol=1e-10"
+    )
     def test_truncated_gaussian_sampling_limit(
         self, size_tgt, pixscale_src, pixscale_tgt, angle, expected_flux
     ):
@@ -245,6 +244,7 @@ class TestResampleFluxKeys:
         # Interior away from the 2-pixel stencil reach
         assert jnp.allclose(f_tgt[3:-3, 3:-3], 42.0, rtol=1e-10)
 
+    @pytest.mark.float64_only(reason="Constant-field pixel reference at rtol=1e-10")
     def test_no_interior_smoothing_of_constant(self):
         """A constant field stays constant on the interior.
 

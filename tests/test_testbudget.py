@@ -4,11 +4,19 @@ import json
 
 import pytest
 
+from hwoutils.precision import float_dtype
 from hwoutils.testbudget import trend
 from hwoutils.testbudget.cli import main as cli_main
 from hwoutils.testbudget.config import load_config
 
 pytest_plugins = ["pytester"]
+
+
+def _run_budget(pytester, *args):
+    # A nested run shares the outer process's JAX precision.
+    return pytester.runpytest_inprocess(
+        "-p", "no:hwoutils.testing.precision", "-p", "hwoutils.testbudget.plugin", *args
+    )
 
 
 @pytest.fixture
@@ -22,7 +30,7 @@ def project(pytester, tmp_path):
             f'trend_file = "{trend_file}"\nrss_poll_s = 0\n{table}\n'
         )
         pytester.makepyfile(test_demo=body)
-        return pytester.runpytest_inprocess("-p", "hwoutils.testbudget.plugin", *args)
+        return _run_budget(pytester, *args)
 
     make.trend_file = trend_file
     return make
@@ -122,12 +130,13 @@ def test_compile_seconds_exclude_cache_hits(project):
     )
 
 
-def test_summary_line_keeps_field_order_and_appends_compile_s(project):
+def test_summary_line_keeps_field_order_and_appends_compile_s(project, precision):
     """Fails if compile_s is not appended after the existing summary fields."""
     result = project("", "def test_a():\n    pass\n")
     result.stdout.fnmatch_lines(
         ["mode=report tests=1 wall=*s peak_rss=*GB compiles=* violations=0 compile_s=*"]
     )
+    assert float_dtype() == precision
 
 
 def test_module_compile_seconds_fails_in_enforce_mode(project):
@@ -265,9 +274,7 @@ def test_same_basename_in_two_directories_is_two_modules(pytester, tmp_path):
     for sub in ("a", "b"):
         pytester.mkpydir(sub)
         (pytester.path / sub / "test_same.py").write_text(SPLIT.split("def test_b")[0])
-    result = pytester.runpytest_inprocess(
-        "-p", "hwoutils.testbudget.plugin", "-n", "2", "--dist", "load"
-    )
+    result = _run_budget(pytester, "-n", "2", "--dist", "load")
     result.assert_outcomes(passed=2)
     assert result.ret == 0
 
@@ -280,7 +287,7 @@ def _two_modules(pytester, tmp_path, table):
     (pytester.path / "sub").mkdir(exist_ok=True)
     (pytester.path / "sub" / "__init__.py").touch()
     (pytester.path / "sub" / "test_m.py").write_text(SPLIT)
-    return pytester.runpytest_inprocess("-p", "hwoutils.testbudget.plugin")
+    return _run_budget(pytester)
 
 
 def test_by_file_key_matches_basename_of_nested_module(pytester, tmp_path):
@@ -313,7 +320,7 @@ def test_revisit_violation_is_listed_once(pytester, tmp_path):
         "    items.sort(key=lambda i: order.index(i.name))\n"
     )
     pytester.makepyfile(test_a=SPLIT, test_other="def test_b1():\n    pass\n")
-    result = pytester.runpytest_inprocess("-p", "hwoutils.testbudget.plugin")
+    result = _run_budget(pytester)
     result.stdout.fnmatch_lines(["*violations=1 *"])
 
 
@@ -333,7 +340,7 @@ def test_module_revisits_are_judged_cumulatively(pytester, tmp_path):
         test_a=SPLIT.replace("test_a", "test_a1").replace("test_b", "test_a2"),
         test_b="def test_b1():\n    pass\n",
     )
-    result = pytester.runpytest_inprocess("-p", "hwoutils.testbudget.plugin")
+    result = _run_budget(pytester)
     result.assert_outcomes(passed=3, errors=1)
     result.stdout.fnmatch_lines(["*test_a.py spent 4.0 s*"])
 
@@ -819,7 +826,7 @@ def pytest_runtest_teardown(item, nextitem):
 """
     )
     pytester.makepyfile(test_demo=SINGLE_USE_FIXTURE)
-    result = pytester.runpytest_inprocess("-p", "hwoutils.testbudget.plugin")
+    result = _run_budget(pytester)
     assert result.ret != 0
     result.stdout.fnmatch_lines(["*with its share of fixture setup*'built'*"])
 

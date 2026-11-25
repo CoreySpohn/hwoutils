@@ -1,13 +1,10 @@
 """Tests for hwoutils.map_coordinates -- cubic spline interpolation."""
 
-import jax
+import jax.numpy as jnp
+import pytest
+from scipy import ndimage
 
-jax.config.update("jax_enable_x64", True)
-
-import jax.numpy as jnp  # noqa: E402
-from scipy import ndimage  # noqa: E402
-
-from hwoutils.map_coordinates import map_coordinates  # noqa: E402
+from hwoutils.map_coordinates import map_coordinates
 
 # =============================================================================
 # Interpolation Orders
@@ -17,13 +14,10 @@ from hwoutils.map_coordinates import map_coordinates  # noqa: E402
 class TestInterpolationOrders:
     """Test standard interpolation orders compared to SciPy reference."""
 
-    # We use float64 for testing comparison against scipy
-    f_src = jnp.array(
-        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=jnp.float64
-    )
+    f_src = jnp.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
 
-    y_coords = jnp.array([0.5, 1.5], dtype=jnp.float64)
-    x_coords = jnp.array([0.5, 1.5], dtype=jnp.float64)
+    y_coords = jnp.array([0.5, 1.5])
+    x_coords = jnp.array([0.5, 1.5])
     coords = (y_coords, x_coords)
 
     def test_nearest_neighbor(self):
@@ -65,14 +59,14 @@ class TestInterpolationOrders:
                 [50.0, 60.0, 70.0, 80.0],
                 [11.0, 22.0, 33.0, 44.0],
                 [55.0, 66.0, 77.0, 88.0],
-            ],
-            dtype=jnp.float64,
+            ]
         )
         # Interior integer coords - no boundary effects with 4-tap stencil
         coords = (jnp.array([1.0, 2.0]), jnp.array([1.0, 2.0]))
         res = map_coordinates(f, coords, order=3)
         assert jnp.allclose(res, jnp.array([60.0, 33.0]), rtol=1e-12)
 
+    @pytest.mark.float64_only(reason="Cubic partition-of-unity reference at rtol=1e-12")
     def test_cubic_partition_of_unity(self):
         """Sum of Keys weights over integer shifts equals 1 at any offset.
 
@@ -81,7 +75,7 @@ class TestInterpolationOrders:
         partition-of-unity property that reproduces constant fields; it
         does not establish conservative downsampling.
         """
-        f = jnp.ones((8, 8), dtype=jnp.float64)
+        f = jnp.ones((8, 8))
         # Interior coords (stencil fully inside the array)
         coords = (
             jnp.array([2.0, 2.3, 2.5, 2.7, 3.9]),
@@ -115,9 +109,9 @@ class TestDimensionality:
         expected = jnp.array([2.25, 6.25, 12.25, 22.5])
         assert jnp.allclose(res_cubic, expected, rtol=1e-10)
 
-    def test_3d_array(self):
+    def test_3d_array(self, precision):
         """3D array interpolation."""
-        f_src = jnp.arange(27).reshape((3, 3, 3)).astype(jnp.float64)
+        f_src = jnp.arange(27).reshape((3, 3, 3)).astype(precision)
         z = jnp.array([0.5, 1.5])
         y = jnp.array([0.5, 1.5])
         x = jnp.array([0.5, 1.5])
@@ -143,9 +137,7 @@ class TestDimensionality:
 class TestBoundaryModes:
     """Test boundary handling modes compared to SciPy."""
 
-    f_src = jnp.array(
-        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=jnp.float64
-    )
+    f_src = jnp.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
     y_coords = jnp.array([-0.5, 2.5])
     x_coords = jnp.array([-0.5, 2.5])
     coords = (y_coords, x_coords)
@@ -223,7 +215,7 @@ class TestEdgeCases:
         a single in-bounds unit-valued stencil tap on one axis while the
         other axis contributes partition-of-unity weight 1.
         """
-        f_src = jnp.ones((4, 4), dtype=jnp.float64)
+        f_src = jnp.ones((4, 4))
 
         y_coords = jnp.array([4.5, -1.0, 1.5, 10.0])
         x_coords = jnp.array([1.5, 10.0, 4.5, -1.0])

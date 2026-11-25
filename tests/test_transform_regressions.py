@@ -10,13 +10,7 @@ from hwoutils.map_coordinates import map_coordinates
 from hwoutils.transforms import rotate_image
 
 
-@pytest.fixture(autouse=True)
-def enable_x64():
-    """Resolve numerical geometry errors independently of float32 roundoff."""
-    with jax.enable_x64():
-        yield
-
-
+@pytest.mark.float64_only(reason="Analytic Gaussian reference at rtol=1e-9")
 @pytest.mark.parametrize("n", [63, 64])
 @pytest.mark.parametrize("angle", [0.0, 30.0, 44.999, 45.001, 90.0, -30.0])
 def test_rotation_matches_analytic_gaussian(n, angle):
@@ -31,6 +25,7 @@ def test_rotation_matches_analytic_gaussian(n, angle):
     np.testing.assert_allclose(actual, expected, atol=1e-10, rtol=1e-9)
 
 
+@pytest.mark.float64_only(reason="Analytic angle-derivative reference at atol=1e-9")
 @pytest.mark.parametrize("angle", [0.0, 90.0, -90.0, 180.0])
 def test_rotation_angle_derivative_at_right_angles(angle):
     """An exact array turn must not erase the local angle derivative."""
@@ -85,8 +80,7 @@ def test_integer_samples_keep_fractional_coordinates(order, expected):
 
 
 @pytest.mark.parametrize("angle", [30.0, 90.0, 180.0])
-@pytest.mark.parametrize("x64", [False, True])
-def test_rotation_about_optical_center(angle, x64):
+def test_rotation_about_optical_center(angle, precision):
     """FITS optical centers need not equal the geometric array center."""
     y, x = np.mgrid[:64, :64]
     source = np.exp(-((y - 28) ** 2 + (x - 38) ** 2) / 18)
@@ -94,13 +88,15 @@ def test_rotation_about_optical_center(angle, x64):
     cx = 32 + 6 * np.cos(theta) + 4 * np.sin(theta)
     cy = 32 + 6 * np.sin(theta) - 4 * np.cos(theta)
     expected = np.exp(-((y - cy) ** 2 + (x - cx) ** 2) / 18)
-    with jax.enable_x64(x64):
-        actual = rotate_image(
-            jnp.asarray(source), angle, center=(32.0, 32.0), pad_factor=1.5
-        )
-        np.testing.assert_allclose(actual, expected, atol=1e-10 if x64 else 1e-6)
+    actual = rotate_image(
+        jnp.asarray(source), angle, center=(32.0, 32.0), pad_factor=1.5
+    )
+    np.testing.assert_allclose(
+        actual, expected, atol=1e-10 if precision.itemsize == 8 else 1e-6
+    )
 
 
+@pytest.mark.float64_only(reason="Analytic Nyquist shear reference at atol=1e-14")
 def test_nyquist_shear_uses_real_cosine_interpolant():
     """Even-grid Nyquist content stays real with the expected cosine amplitude."""
     source = jnp.tile((-1.0) ** jnp.arange(16), (16, 1))

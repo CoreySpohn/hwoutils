@@ -55,16 +55,27 @@ class TestFluxConversions:
         assert np.isfinite(derivative)
         np.testing.assert_allclose(derivative, expected, rtol=1e-6, atol=0)
 
-    @pytest.mark.parametrize("backend", [np, jnp], ids=["numpy", "jax"])
+    @pytest.mark.parametrize(
+        "backend",
+        [
+            pytest.param(np, id="numpy"),
+            pytest.param(
+                jnp,
+                id="jax",
+                marks=pytest.mark.float64_only(
+                    reason="Float64 conversion operation order"
+                ),
+            ),
+        ],
+    )
     def test_jy_float64_matches_base_operation_order(self, backend):
         # Freeze the operation order of the original conversion formulas.
-        with jax.enable_x64():
-            flux = backend.asarray(np.logspace(-20, 20, 9))[:, None]
-            wavelength_nm = backend.asarray(np.logspace(2, 4, 5))[None, :]
-            expected_phot = flux * JANSKY_SI / (wavelength_nm * PLANCK_CONSTANT_SI)
-            expected_jy = flux * (wavelength_nm * PLANCK_CONSTANT_SI) / JANSKY_SI
-            actual_phot = conv.jy_to_photons_per_nm_per_m2(flux, wavelength_nm)
-            actual_jy = conv.photons_per_nm_per_m2_to_jy(flux, wavelength_nm)
+        flux = backend.asarray(np.logspace(-20, 20, 9))[:, None]
+        wavelength_nm = backend.asarray(np.logspace(2, 4, 5))[None, :]
+        expected_phot = flux * JANSKY_SI / (wavelength_nm * PLANCK_CONSTANT_SI)
+        expected_jy = flux * (wavelength_nm * PLANCK_CONSTANT_SI) / JANSKY_SI
+        actual_phot = conv.jy_to_photons_per_nm_per_m2(flux, wavelength_nm)
+        actual_jy = conv.photons_per_nm_per_m2_to_jy(flux, wavelength_nm)
         np.testing.assert_array_max_ulp(
             np.asarray(actual_phot), np.asarray(expected_phot), 2
         )

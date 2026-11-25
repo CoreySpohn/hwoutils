@@ -9,13 +9,9 @@ from hwoutils import constants as const
 from hwoutils import conversions as conv
 
 
-@pytest.fixture(autouse=True, scope="module")
-def precision():
-    with jax.enable_x64():
-        yield
-    jax.clear_caches()
-
-
+@pytest.mark.float64_only(
+    reason="Photometry and angular diameter references at rtol=3e-15"
+)
 def test_photometric_ratios_diameters_and_literature_zero_point():
     """Fails for a magnitude sign, radius/diameter or mas/arcsec error.
 

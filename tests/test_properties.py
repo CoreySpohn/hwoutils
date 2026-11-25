@@ -1,13 +1,10 @@
 """Property-based tests for hwoutils to verify invariants across arbitrary inputs."""
 
-import jax
 import jax.numpy as jnp
 from hypothesis import example, given, settings
 from hypothesis.strategies import floats, integers
 
 from hwoutils.transforms import ccw_rotation_matrix, resample_flux
-
-jax.config.update("jax_enable_x64", True)
 
 # =============================================================================
 # Transforms: Flux Conservation

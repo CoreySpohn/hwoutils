@@ -35,13 +35,6 @@ from hwoutils.leaves import (
 pytest_plugins = ["pytester"]
 
 
-@pytest.fixture(params=[False, True], ids=["x32", "x64"])
-def x64(request):
-    """Run the test under each precision, scoped like a host build."""
-    with jax.enable_x64(request.param):
-        yield request.param
-
-
 class Held(eqx.Module):
     """An owned Module whose single field stores what it is given."""
 
@@ -87,18 +80,19 @@ def _strong(x, dtype):
     return isinstance(x, jax.Array) and x.dtype == dtype and not x.weak_type
 
 
-def test_float_dtype_follows_scope(x64):
-    """Exact dtype basis. Fails if the dtype is read once instead of per call."""
-    assert float_dtype() == (np.float64 if x64 else np.float32)
-    assert dtype_tag() == ("f64" if x64 else "f32")
+def test_float_dtype_follows_lane(precision):
+    """The default dtype and cache tag agree with the selected lane."""
+    assert float_dtype() == precision
+    assert dtype_tag() == ("f64" if precision == np.float64 else "f32")
 
 
-def test_as_float_leaf_is_strong_and_active(x64):
+def test_as_float_leaf_is_strong_and_active(precision):
     """Exact type and dtype basis (test a).
 
     Fails if a NumPy, list, NumPy scalar, Python int or weak input keeps its
     own dtype or weak type, or if complex input is accepted on a real field.
     """
+    x64 = precision == np.float64
     inputs = [
         np.array([1.0, 2.0]),
         [1.0, 2.0],
@@ -118,12 +112,13 @@ def test_as_float_leaf_is_strong_and_active(x64):
     )
 
 
-def test_as_leaf_keeps_kind_and_refuses_wrap(x64):
+def test_as_leaf_keeps_kind_and_refuses_wrap(precision):
     """Exact kind basis and the int32 range (test b).
 
     Fails if integers or booleans become floats, or if 3e9 is wrapped to
     -1294967296 under x32 instead of refused.
     """
+    x64 = precision == np.float64
     assert _strong(as_leaf(np.array([1, 2])), np.dtype(np.int64 if x64 else np.int32))
     assert _strong(as_leaf(np.array([True])), np.dtype(np.bool_))
     assert _strong(as_leaf(True), np.dtype(np.bool_))
@@ -147,27 +142,26 @@ def test_check_tree_finds_each_violation_once():
     Fails if any kind is missed or counted twice, or if ``canonical`` leaves
     one behind.
     """
-    with jax.enable_x64(True):
-        bad = [
-            np.ones(2),
-            np.float64(1.0),
-            1.0,
-            jnp.asarray(1.0),
-        ]
-        reasons = [
-            "NumPy leaf",
-            "NumPy leaf",
-            "Python number leaf",
-            "weakly typed leaf",
-        ]
-        for value, reason in zip(bad, reasons, strict=True):
-            found = check_tree(Held(value))
-            assert [v.reason for v in found] == [reason], value
-            assert found[0].path == ".value"
-            assert check_tree(canonical(Held(value))) == ()
+    bad = [
+        np.ones(2),
+        np.float64(1.0),
+        1.0,
+        jnp.asarray(1.0),
+    ]
+    reasons = [
+        "NumPy leaf",
+        "NumPy leaf",
+        "Python number leaf",
+        "weakly typed leaf",
+    ]
+    for value, reason in zip(bad, reasons, strict=True):
+        found = check_tree(Held(value))
+        assert [v.reason for v in found] == [reason], value
+        assert found[0].path == ".value"
+        assert check_tree(canonical(Held(value))) == ()
 
 
-def test_numpy_leaf_in_float32_model(x64):
+def test_numpy_leaf_in_float32_model():
     """The NumPy violation reaches the entry point with its full field path."""
     model = Held((jnp.float32(1), np.ones(2, dtype=np.float64)))
     assert [(v.path, v.reason) for v in check_tree(model)] == [
@@ -191,8 +185,9 @@ def test_unavailable_strong_precision():
                 convert(value)
 
 
-def test_converter_preserves_strong_arrays_and_tracers(x64):
+def test_converter_preserves_strong_arrays_and_tracers(precision):
     """Strong fields retain their dtype when an Equinox model is rebuilt."""
+    x64 = precision == np.float64
     for fn, dtype in [(as_float_leaf, jnp.float32), (as_complex_leaf, jnp.complex64)]:
         value = jnp.ones(2, dtype=dtype)
         assert _strong(fn(value), dtype)
@@ -211,8 +206,9 @@ def test_converter_preserves_strong_arrays_and_tracers(x64):
     )
 
 
-def test_bulk_reader_and_owner_precision(x64):
+def test_bulk_reader_and_owner_precision(precision):
     """A narrow complex table keeps both components and follows its reader."""
+    x64 = precision == np.float64
     data = np.array([1.25 - 0.5j], np.complex64)
     cube = Cube(data)
     tree = (cube, as_float_leaf(2.0), HostGrid([1.0]))
@@ -246,8 +242,9 @@ def test_bulk_reader_and_owner_precision(x64):
             np.testing.assert_array_equal(narrowed, table)
 
 
-def test_mixed_tree_and_explicit_canonical_round_trip(x64):
+def test_mixed_tree_and_explicit_canonical_round_trip(precision):
     """Exactly representable inputs survive a narrow and wide round trip."""
+    x64 = precision == np.float64
     host = (np.array([1.25, -0.5]), np.array([-2.25 + 0.5j]), 7, True)
     narrow = canonical(host, precision="float32")
     assert [x.dtype.kind for x in narrow] == ["f", "c", "i", "b"]
@@ -280,8 +277,9 @@ def test_mixed_tree_and_explicit_canonical_round_trip(x64):
     assert check_tree(mixed, bulk=("[0]",)) == ()
 
 
-def test_range_refusal_checks_each_component(x64):
+def test_range_refusal_checks_each_component(precision):
     """A representable component cannot mask overflow or loss of the other."""
+    x64 = precision == np.float64
     for value, message in [(1e100, "do not fit"), (1e-100, "underflow")]:
         for data in [np.array([value]), np.array([complex(3, value)])]:
             inputs = [data, jnp.asarray(data)] if x64 else [data]
@@ -361,7 +359,6 @@ def test_host_grid_identity():
 
 
 _PLUGIN_TESTS = """
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -390,8 +387,7 @@ def test_inside_library_try():
 
 
 def test_mixed_fields():
-    with jax.enable_x64(True):
-        Raw((jnp.float32(1), jnp.float64(2)))
+    Raw((jnp.float32(1), jnp.float64(2)))
 """
 
 
@@ -407,7 +403,12 @@ def test_plugin_records_and_never_raises(pytester, monkeypatch):
     pytester.makeini("[pytest]\nleaf_contract_packages = test_plugin_cases\n")
     pytester.makepyfile(test_plugin_cases=_PLUGIN_TESTS)
     report = pytester.path / "leaves.json"
-    result = pytester.runpytest_inprocess(f"--leaf-report={report}")
+    result = pytester.runpytest_subprocess(
+        "-p",
+        "hwoutils.testing.precision",
+        "--precision=float64",
+        f"--leaf-report={report}",
+    )
     result.assert_outcomes(passed=3)
     data = json.loads(report.read_text())
     assert not data["errors"]
@@ -431,7 +432,7 @@ class Keyed(eqx.Module):
     value: jax.Array
 
 
-def test_typed_key_is_a_valid_leaf(x64):
+def test_typed_key_is_a_valid_leaf():
     """Exact count basis. Fails if a typed PRNG key crashes or is flagged."""
     model = Keyed(jax.random.key(0), jnp.ones(2))
     assert check_tree(model) == ()
@@ -448,18 +449,18 @@ def test_equinox_modules_are_foreign():
     assert canonical(held).value.p == 0.5
 
 
-def test_as_float_leaf_refuses_overflow():
+def test_as_float_leaf_refuses_overflow(precision):
     """Exact basis: float32 holds up to 3.4028235e38. Fails if a finite
     float64 above it silently becomes inf under x32, or if x64, NaN, inf or a
     tracer is refused."""
-    with jax.enable_x64(False):
+    if precision == np.float32:
         with pytest.raises(ValueError, match="do not fit float32"):
             as_float_leaf(np.array([1.0, 1e300]))
         assert np.isinf(as_float_leaf(np.array([np.inf]))[0])
         assert np.isnan(as_float_leaf(np.array([np.nan]))[0])
         assert as_float_leaf(1e30) == jnp.float32(1e30)
         assert jax.jit(as_float_leaf)(jnp.ones(2)).dtype == jnp.float32
-    with jax.enable_x64(True):
+    else:
         assert as_float_leaf(np.array([1e300]))[0] == 1e300
 
 
@@ -476,11 +477,11 @@ def test_equinox_partial_with_numpy_is_flagged():
     assert check_tree(Held(eqx.nn.Dropout(0.5))) == ()
 
 
-def test_converters_refuse_values_that_do_not_fit():
+def test_converters_refuse_values_that_do_not_fit(precision):
     """Exact basis: int32 and float32 ranges, float32 smallest subnormal 1.4e-45.
     Fails if a huge Python integer wraps, overflows to inf or underflows
     silently under x32, or if x64 refuses what float64 holds."""
-    with jax.enable_x64(False):
+    if precision == np.float32:
         with pytest.raises(ValueError, match="do not fit int32"):
             as_leaf(2**70)
         with pytest.raises(ValueError, match="do not fit"):
@@ -488,7 +489,7 @@ def test_converters_refuse_values_that_do_not_fit():
         with pytest.raises(ValueError, match="underflow"):
             as_float_leaf(1e-50)
         assert as_float_leaf(0.0) == 0.0
-    with jax.enable_x64(True):
+    else:
         with pytest.raises(ValueError) as huge:
             as_float_leaf(2**2000)
         assert len(str(huge.value)) < 300
@@ -498,7 +499,7 @@ def test_converters_refuse_values_that_do_not_fit():
         assert as_float_leaf(1e-50) == 1e-50
 
 
-def test_converters_name_the_key_refusal(x64):
+def test_converters_name_the_key_refusal():
     """Exact basis: a typed key has no numeric dtype. Fails if a key crashes
     with an opaque dtype error instead of a clear TypeError."""
     for convert in (as_leaf, as_float_leaf):
@@ -506,7 +507,7 @@ def test_converters_name_the_key_refusal(x64):
             convert(jax.random.key(0))
 
 
-def test_bfloat16_is_flagged_like_float16(x64):
+def test_bfloat16_is_flagged_like_float16():
     """Exact count basis. Fails if a bfloat16 leaf passes as a float."""
     for dtype in (jnp.float16, jnp.bfloat16):
         found = check_tree(Held(jnp.ones(2, dtype=dtype)))

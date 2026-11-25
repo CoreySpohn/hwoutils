@@ -1,17 +1,9 @@
 """Focused tests for Gregorian calendar dates converted to Julian days."""
 
-import jax
 import jax.numpy as jnp
 import pytest
 
 from hwoutils import conversions as conv
-
-
-@pytest.fixture(autouse=True)
-def enable_x64():
-    """Preserve fractional days at the magnitude of Julian dates."""
-    with jax.enable_x64():
-        yield
 
 
 class TestGregorianToJd:
@@ -37,6 +29,9 @@ class TestGregorianToJd:
         # Meeus, Astronomical Algorithms (2nd ed.), ch. 7 (MJD = JD - 2400000.5).
         assert conv.gregorian_to_jd(1858, 11, 17.0) == 2400000.5
 
+    @pytest.mark.float64_only(
+        reason="Julian date reference includes sub-float32-ULP fractions"
+    )
     def test_fractional_days(self):
         """Exactly representable day fractions shift JD by the same fraction."""
         for year, month, day in [(1970, 1, 1), (2000, 2, 29), (2024, 12, 31)]:
@@ -109,6 +104,9 @@ class TestGregorianToJd:
         assert actual.shape == expected.shape
         assert jnp.array_equal(actual, expected)
 
+    @pytest.mark.float64_only(
+        reason="Julian date reference includes sub-float32-ULP fractions"
+    )
     def test_astropy_crosscheck(self):
         """Modern dates agree with Astropy's UTC Julian dates."""
         # UTC .jd is a quasi-JD (leap-second days stretch); none of these dates has one.

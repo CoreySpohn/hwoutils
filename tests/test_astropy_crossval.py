@@ -1,6 +1,6 @@
 """Cross-validation tests against astropy to guarantee machine-precision correctness."""
 
-import jax.numpy as jnp
+import numpy as np
 from astropy import constants as astropy_const
 from astropy import units as u
 from astropy.time import Time
@@ -18,29 +18,29 @@ class TestConstantsValidation:
 
     def test_speed_of_light(self):
         """Verify c is exact in SI."""
-        assert jnp.isclose(hwo_const.c, astropy_const.c.value, atol=1e-12)
+        assert np.isclose(hwo_const.c, astropy_const.c.value, atol=1e-12)
 
     def test_planck_constant(self):
         """Verify h is exact in SI (2019 redefinition)."""
-        assert jnp.isclose(hwo_const.h, astropy_const.h.value, atol=1e-45)
+        assert np.isclose(hwo_const.h, astropy_const.h.value, atol=1e-45)
 
     def test_boltzmann_constant(self):
         """Verify k_B is exact in SI (2019 redefinition)."""
-        assert jnp.isclose(hwo_const.k_B, astropy_const.k_B.value, atol=1e-35)
+        assert np.isclose(hwo_const.k_B, astropy_const.k_B.value, atol=1e-35)
 
     def test_stefan_boltzmann(self):
         """Verify sigma_SB matches astropy."""
-        assert jnp.isclose(hwo_const.sigma_SB, astropy_const.sigma_sb.value, rtol=1e-12)
+        assert np.isclose(hwo_const.sigma_SB, astropy_const.sigma_sb.value, rtol=1e-12)
 
     def test_gravitational_constant(self):
         """Verify G matches astropy."""
-        assert jnp.isclose(hwo_const.G_si, astropy_const.G.value, rtol=1e-12)
+        assert np.isclose(hwo_const.G_si, astropy_const.G.value, rtol=1e-12)
 
     def test_masses(self):
         """Verify solar, Earth, and Jupiter masses match astropy."""
-        assert jnp.isclose(hwo_const.Msun2kg, astropy_const.M_sun.value, rtol=1e-12)
-        assert jnp.isclose(hwo_const.Mearth2kg, astropy_const.M_earth.value, rtol=1e-12)
-        assert jnp.isclose(hwo_const.Mjup2kg, astropy_const.M_jup.value, rtol=1e-12)
+        assert np.isclose(hwo_const.Msun2kg, astropy_const.M_sun.value, rtol=1e-12)
+        assert np.isclose(hwo_const.Mearth2kg, astropy_const.M_earth.value, rtol=1e-12)
+        assert np.isclose(hwo_const.Mjup2kg, astropy_const.M_jup.value, rtol=1e-12)
 
     def test_solar_gravitational_parameter(self):
         """Verify GM_SUN_AU3_PER_D2 is G times the solar mass."""
@@ -48,10 +48,10 @@ class TestConstantsValidation:
 
     def test_distances(self):
         """Verify AU, parsec, and Earth and solar radii match astropy."""
-        assert jnp.isclose(hwo_const.AU2m, astropy_const.au.value, rtol=1e-12)
-        assert jnp.isclose(hwo_const.pc2m, astropy_const.pc.value, rtol=1e-12)
-        assert jnp.isclose(hwo_const.Rearth2m, astropy_const.R_earth.value, rtol=1e-12)
-        assert jnp.isclose(hwo_const.Rsun2m, astropy_const.R_sun.value, rtol=1e-12)
+        assert np.isclose(hwo_const.AU2m, astropy_const.au.value, rtol=1e-12)
+        assert np.isclose(hwo_const.pc2m, astropy_const.pc.value, rtol=1e-12)
+        assert np.isclose(hwo_const.Rearth2m, astropy_const.R_earth.value, rtol=1e-12)
+        assert np.isclose(hwo_const.Rsun2m, astropy_const.R_sun.value, rtol=1e-12)
 
 
 # =============================================================================
@@ -75,7 +75,7 @@ class TestConversionsValidation:
         # hwoutils conversion
         hwo_flux = hwo_conv.jy_to_photons_per_nm_per_m2(1.0, 550.0)
 
-        assert jnp.isclose(hwo_flux, astropy_flux.value, rtol=1e-12)
+        assert np.isclose(hwo_flux, astropy_flux.value, rtol=1e-12)
 
     def test_decimal_year_to_jd_astropy(self):
         """Cross-validate decimal year to Julian Date against astropy.time."""
@@ -90,7 +90,7 @@ class TestConversionsValidation:
 
         # We enforce < 0.5 days (12 hours) precision drift
         # in epoch conversion over thousands of days
-        assert jnp.isclose(hwo_jd, astropy_jd, atol=0.5)
+        assert np.isclose(hwo_jd, astropy_jd, atol=0.5)
 
     def test_mag_to_jy(self):
         """Cross-validate AB Magnitude to Jansky."""
@@ -99,7 +99,7 @@ class TestConversionsValidation:
 
         hwo_jy = hwo_conv.mag_per_arcsec2_to_jy_per_arcsec2(15.0)
 
-        assert jnp.isclose(hwo_jy, astropy_jy.value, rtol=1e-12)
+        assert np.isclose(hwo_jy, astropy_jy.value, rtol=1e-12)
 
     def test_mjy_per_sr_to_jy_per_arcsec2(self):
         """Cross-validate MJy/sr against Jy/arcsec^2, both directions."""
@@ -109,8 +109,8 @@ class TestConversionsValidation:
         hwo_val = hwo_conv.mjy_per_sr_to_jy_per_arcsec2(12.5)
         back = hwo_conv.jy_per_arcsec2_to_mjy_per_sr(astropy_val)
 
-        assert jnp.isclose(hwo_val, astropy_val, rtol=1e-12, atol=0.0)
-        assert jnp.isclose(back, 12.5, rtol=1e-12, atol=0.0)
+        assert np.isclose(hwo_val, astropy_val, rtol=1e-12, atol=0.0)
+        assert np.isclose(back, 12.5, rtol=1e-12, atol=0.0)
 
     def test_mjy_per_sr_to_jy(self):
         """Cross-validate a surface brightness times a pixel solid angle."""
@@ -119,4 +119,4 @@ class TestConversionsValidation:
 
         hwo_val = hwo_conv.mjy_per_sr_to_jy(12.5, pixel_sr)
 
-        assert jnp.isclose(hwo_val, astropy_val, rtol=1e-12, atol=0.0)
+        assert np.isclose(hwo_val, astropy_val, rtol=1e-12, atol=0.0)
