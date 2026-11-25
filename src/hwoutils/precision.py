@@ -11,7 +11,7 @@ class PrecisionError(RuntimeError):
     """An operation requires a different or a uniform floating precision."""
 
 
-def enable_x64(use_x64: bool = True) -> None:
+def enable_x64(use_x64: bool = True, *, use_env: bool = True) -> None:
     """Enable 64-bit floating-point precision in JAX.
 
     By default JAX uses 32-bit precision. Call this before any array
@@ -19,10 +19,9 @@ def enable_x64(use_x64: bool = True) -> None:
 
     Args:
         use_x64: When True, JAX arrays use 64-bit precision.
-            Falls back to the ``JAX_ENABLE_X64`` environment variable
-            when False.
+        use_env: Honor ``JAX_ENABLE_X64`` when ``use_x64`` is False.
     """
-    if not use_x64:
+    if not use_x64 and use_env:
         use_x64 = bool(os.getenv("JAX_ENABLE_X64", 0))
     jax.config.update("jax_enable_x64", use_x64)
 
