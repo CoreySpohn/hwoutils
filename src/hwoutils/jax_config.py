@@ -9,45 +9,10 @@ import os
 import re
 
 import jax
-import numpy as np
 
-
-def enable_x64(use_x64: bool = True) -> None:
-    """Enable 64-bit floating-point precision in JAX.
-
-    By default JAX uses 32-bit precision. Call this before any array
-    operations to switch to 64-bit (NumPy-compatible) precision.
-
-    Args:
-        use_x64: When True, JAX arrays use 64-bit precision.
-            Falls back to the ``JAX_ENABLE_X64`` environment variable
-            when False.
-    """
-    if not use_x64:
-        use_x64 = bool(os.getenv("JAX_ENABLE_X64", 0))
-    jax.config.update("jax_enable_x64", use_x64)
-
-
-def float_dtype() -> np.dtype:
-    """Return the active float dtype: float64 under x64, else float32.
-
-    Read it when an object is built, not at import, so that a test which
-    scopes ``jax.enable_x64()`` around a construction sees the precision in
-    force there.
-
-    Returns:
-        The NumPy dtype that JAX uses for a default float array.
-    """
-    return np.dtype(jax.dtypes.canonicalize_dtype(np.float64))
-
-
-def dtype_tag() -> str:
-    """Return a short cache key for the active float dtype.
-
-    Returns:
-        ``"f64"`` when the active float dtype is 8 bytes wide, else ``"f32"``.
-    """
-    return "f64" if float_dtype().itemsize == 8 else "f32"
+from hwoutils.precision import dtype_tag as dtype_tag
+from hwoutils.precision import enable_x64 as enable_x64
+from hwoutils.precision import float_dtype as float_dtype
 
 
 def set_platform(platform: str | None = None) -> None:

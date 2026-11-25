@@ -5,3 +5,11 @@
   language: script
   types: [text]
   exclude: ^CHANGELOG\.md$
+- id: precision-guard
+  name: floating-point precision guard
+  description: Report violations of the floating-point precision contract.
+  entry: src/hwoutils/precision_guard.py
+  language: script
+  types: [python]
+  files: ^(src|tests)/
+  verbose: true

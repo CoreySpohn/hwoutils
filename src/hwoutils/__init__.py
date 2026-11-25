@@ -12,28 +12,35 @@ try:
 except ModuleNotFoundError:
     __version__ = "unknown"
 
-__all__ = [
-    "__version__",
-    "enable_x64",
-    "set_host_device_count",
-    "set_platform",
-]
+_EXPORTS = {
+    "PrecisionError": "precision",
+    "complex_of": "precision",
+    "enable_x64": "precision",
+    "float_dtype": "precision",
+    "like": "precision",
+    "precision_of": "precision",
+    "require_float64": "precision",
+    "set_host_device_count": "jax_config",
+    "set_platform": "jax_config",
+}
+
+__all__ = ["__version__", *_EXPORTS]
 
 
 def __getattr__(name):
-    """Load the JAX configuration helpers only when requested.
+    """Load the JAX helpers only when requested.
 
     Args:
         name: Attribute name looked up on the package.
 
     Returns:
-        The requested helper from ``hwoutils.jax_config``.
+        The requested public attribute.
 
     Raises:
         AttributeError: If ``name`` is not a lazy public export.
     """
-    if name in __all__ and name != "__version__":
-        value = getattr(_import_module("hwoutils.jax_config"), name)
+    if name in _EXPORTS:
+        value = getattr(_import_module(f"hwoutils.{_EXPORTS[name]}"), name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

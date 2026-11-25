@@ -68,6 +68,17 @@ export JAX_PLATFORMS=cpu
 
 ---
 
+## Pytest precision lanes
+
+An installed `hwoutils` registers its precision plugin with pytest. Select a
+lane with `pytest --precision=float32` or `pytest --precision=float64`. The
+`default_precision` pytest setting defaults to `float32`. Pytest applies the
+selected lane before importing its initial `conftest.py` files, including in
+xdist workers.
+
+For source checkouts or when plugin auto-loading is disabled, use
+`pytest -p hwoutils.testing.precision --precision=float64`.
+
 ## `enable_x64`
 
 Switches JAX from 32-bit (default) to 64-bit floating-point precision.
