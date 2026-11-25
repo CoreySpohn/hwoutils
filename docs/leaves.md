@@ -6,8 +6,8 @@ that keep a model to it. It needs the `jax` extra.
 
 ## The rule
 
-Every leaf of an owned model is a `jax.Array`. A floating leaf has the active float dtype (float64 under
-x64, float32 otherwise) and a strong type. Integer and boolean leaves keep their kind. A NumPy array, a NumPy
+Every leaf of an owned model is a `jax.Array`. Floating leaves have one strong working precision per model,
+float32 or float64, with a matching complex dtype. Integer and boolean leaves keep their kind. A NumPy array, a NumPy
 scalar or a Python number is never a leaf: a Python number lives on a `static=True` field, or it is converted.
 
 ## Convert on the field
@@ -35,11 +35,16 @@ print(disk.radius_au.dtype, disk.mask.dtype)
 print(check_tree(disk))
 ```
 
-`as_float_leaf` accepts arrays, scalars and nested sequences. `as_leaf` keeps the kind of its input and
-refuses an integer that does not fit JAX's integer width. `as_bulk_leaf` keeps a float32 cube float32 under
-x64, for the few declared bulk cubes. `as_complex_leaf` is the complex counterpart.
+`as_float_leaf` keeps the dtype of a strong JAX float, including a tracer. Python numbers, NumPy
+values, nested sequences, weak arrays and integers take the construction default (float64 with x64
+enabled, float32 otherwise). `as_complex_leaf` applies the same rule with the matching complex dtype.
+`as_leaf` keeps the numeric kind and checks that an integer fits JAX's integer width.
 
-A finite value that would become infinite in the active dtype is refused rather than stored:
+Declare a large real or complex table with `as_bulk_leaf` to preserve narrow storage. A float32 or
+complex64 table stays narrow under x64. Its reader uses `hwoutils.like(table, owner)` to cast it to
+the owner's working precision at use. Bulk fields do not determine that precision.
+
+A concrete finite value that would become infinite in the target dtype is refused:
 
 ```python
 import jax
@@ -86,11 +91,17 @@ except TypeError as error:
     print(str(error).splitlines()[0][:40])
 ```
 
-The check flags NumPy leaves, Python numbers, weakly typed arrays, and floating or complex arrays whose
-dtype is not the active one (float16 and bfloat16 included). Typed PRNG keys and integer and boolean arrays
+A model can use float32 with x64 enabled. Both checks raise `hwoutils.PrecisionError` when non-bulk
+leaves disagree on precision. Use `canonical(model, precision="float32")` or
+`canonical(model, precision="float64")` from `hwoutils.leaves` to cast the entire model, including
+bulk tables. Omitting `precision` chooses the construction default. Narrowing checks each real and
+imaginary component for range loss. Widening float32 values to float64 is exact and requires x64.
+
+The check flags NumPy leaves, Python numbers, weakly typed arrays, and unsupported working dtypes
+(including float16 and bfloat16). Typed PRNG keys and integer and boolean arrays
 are valid. `check_tree` enters only Modules owned by the workspace libraries; `require_tree` enters every
 Module except those of third-party packages (the Equinox `nn` layers, Diffrax, Interpax), whose own fields are not
-ours to constrain.
+ours to constrain. The public `is_foreign(node, foreign=())` predicate identifies these opaque Modules.
 
 ## Three predicates
 

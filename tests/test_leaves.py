@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from hwoutils import PrecisionError, like, precision_of
 from hwoutils.jax_config import dtype_tag, float_dtype
 from hwoutils.leaves import (
     HostGrid,
@@ -26,6 +27,7 @@ from hwoutils.leaves import (
     as_leaf,
     canonical,
     check_tree,
+    is_foreign,
     is_owned,
     require_tree,
 )
@@ -139,7 +141,7 @@ def test_check_tree_finds_each_violation_once():
     """Exact count basis (test c).
 
     One violation each for a NumPy array, a NumPy scalar, a Python float, a
-    weak scalar and a float32 leaf under x64; none after ``canonical``.
+    weak scalar; none after ``canonical``.
     Fails if any kind is missed or counted twice, or if ``canonical`` leaves
     one behind.
     """
@@ -149,14 +151,12 @@ def test_check_tree_finds_each_violation_once():
             np.float64(1.0),
             1.0,
             jnp.asarray(1.0),
-            jnp.ones(2, dtype=jnp.float32),
         ]
         reasons = [
             "NumPy leaf",
             "NumPy leaf",
             "Python number leaf",
             "weakly typed leaf",
-            "float dtype is not active",
         ]
         for value, reason in zip(bad, reasons, strict=True):
             found = check_tree(Held(value))
@@ -165,15 +165,88 @@ def test_check_tree_finds_each_violation_once():
             assert check_tree(canonical(Held(value))) == ()
 
 
-def test_bulk_field_keeps_float32_only_under_x64(x64):
-    """Exact dtype basis. Fails if a declared bulk cube is widened or flagged."""
-    cube = Cube(np.ones((2, 2), dtype=np.float32))
-    assert cube.cube.dtype == np.float32
-    assert check_tree(cube) == ()
-    assert canonical(cube).cube.dtype == np.float32
-    held = Held(jnp.ones(2, dtype=jnp.float32))
-    assert len(check_tree(held)) == (1 if x64 else 0)
-    assert check_tree(held, bulk=(".value",)) == ()
+def test_converter_preserves_strong_arrays_and_tracers(x64):
+    """Strong fields retain their dtype when an Equinox model is rebuilt."""
+    for fn, dtype in [(as_float_leaf, jnp.float32), (as_complex_leaf, jnp.complex64)]:
+        value = jnp.ones(2, dtype=dtype)
+        assert _strong(fn(value), dtype)
+        assert _strong(jax.jit(fn)(value), dtype)
+    assert _strong(as_complex_leaf(jnp.float32(3)), np.complex64)
+    with pytest.raises(TypeError, match="complex"):
+        jax.jit(lambda x: as_float_leaf([x, x]))(jnp.complex64(1j))
+    for dtype in ["int32", "unrecognized"]:
+        with pytest.raises(PrecisionError, match="Expected float32 or float64"):
+            canonical(1.0, precision=dtype)
+    assert _strong(
+        as_complex_leaf(np.complex64(3j)), np.complex128 if x64 else np.complex64
+    )
+    assert (
+        jax.jit(lambda x: as_float_leaf([x, x]))(jnp.float32(1)).dtype == float_dtype()
+    )
+
+
+def test_bulk_reader_and_owner_precision(x64):
+    """A narrow complex table keeps both components and follows its reader."""
+    data = np.array([1.25 - 0.5j], np.complex64)
+    cube = Cube(data)
+    tree = (cube, as_float_leaf(2.0), HostGrid([1.0]))
+    assert _strong(cube.cube, np.complex64)
+    assert precision_of(tree) == float_dtype()
+    assert check_tree(tree) == ()
+    require_tree(tree)
+    read = like(cube.cube, tree)
+    assert _strong(read, np.complex128 if x64 else np.complex64)
+    np.testing.assert_array_equal(read, data)
+    assert canonical(tree)[0].cube.dtype == read.dtype
+    assert _strong(Cube(data.real).cube, np.float32)
+
+
+def test_mixed_tree_and_explicit_canonical_round_trip(x64):
+    """Exactly representable inputs survive a narrow and wide round trip."""
+    host = (np.array([1.25, -0.5]), np.array([-2.25 + 0.5j]), 7, True)
+    narrow = canonical(host, precision="float32")
+    assert [x.dtype.kind for x in narrow] == ["f", "c", "i", "b"]
+    assert all(not x.weak_type for x in narrow)
+    assert precision_of(narrow) == np.float32
+    require_tree(narrow)
+    if not x64:
+        with pytest.raises(PrecisionError, match="x64"):
+            canonical(narrow, precision="float64")
+        return
+    wide = canonical(narrow, precision="float64")
+    assert _strong(wide[0], np.float64) and _strong(wide[1], np.complex128)
+    for result, expected in zip(wide, host, strict=True):
+        np.testing.assert_array_equal(result, expected)
+    # Include the bottom of the float32 range, where a device cast can flush.
+    tiny = float(np.finfo(np.float32).smallest_subnormal)
+    values = np.array([complex(tiny, -tiny), complex(-0.0, 3.5)], np.complex128)
+    for cast in [canonical, jax.jit(canonical, static_argnames="precision")]:
+        packed = cast(jnp.asarray(values), precision="float32")
+        restored = cast(packed, precision="float64")
+        np.testing.assert_array_equal(
+            np.asarray(restored).view(np.uint64), values.view(np.uint64)
+        )
+    assert jax.grad(lambda x: canonical(x, precision="float64"))(jnp.float32(0)) == 1
+    mixed = (narrow[0], wide[1])
+    for check in [precision_of, check_tree, require_tree]:
+        with pytest.raises(PrecisionError, match=r"canonical\(tree, precision="):
+            check(mixed)
+    require_tree(mixed, bulk=("[0]",))
+    assert check_tree(mixed, bulk=("[0]",)) == ()
+
+
+def test_range_refusal_checks_each_component(x64):
+    """A representable component cannot mask overflow or loss of the other."""
+    for value, message in [(1e100, "do not fit"), (1e-100, "underflow")]:
+        for data in [np.array([value]), np.array([complex(3, value)])]:
+            inputs = [data, jnp.asarray(data)] if x64 else [data]
+            for value_to_cast in inputs:
+                with pytest.raises(ValueError, match=message):
+                    canonical(value_to_cast, precision="float32")
+            if not x64:
+                for cast in [as_bulk_leaf, as_complex_leaf]:
+                    with pytest.raises(ValueError, match=message):
+                        cast(data)
 
 
 def test_foreign_modules_are_not_entered():
@@ -186,7 +259,15 @@ def test_foreign_modules_are_not_entered():
     model = Held(inner)
     assert check_tree(model) == ()
     require_tree(model)
-    assert canonical(model).value.extrap is True
+    assert canonical(model).value is inner
+    assert is_foreign(inner)
+    assert not is_foreign(eqx.Partial(print, 1.0))
+    assert not is_foreign(jnp.asarray(1.0))
+    custom = UserModule(np.ones(2))
+    assert not is_foreign(custom)
+    assert is_foreign(custom, [__name__])
+    require_tree(custom, foreign=[__name__])
+    assert canonical(custom, foreign=[__name__]) is custom
 
 
 def test_ownership_is_decided_by_the_mro():
@@ -232,6 +313,8 @@ def test_host_grid_identity():
 
 
 _PLUGIN_TESTS = """
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 import equinox as eqx
@@ -256,6 +339,11 @@ def test_inside_raises():
 
 def test_inside_library_try():
     assert library_call() is not None
+
+
+def test_mixed_fields():
+    with jax.enable_x64(True):
+        Raw((jnp.float32(1), jnp.float64(2)))
 """
 
 
@@ -272,15 +360,20 @@ def test_plugin_records_and_never_raises(pytester, monkeypatch):
     pytester.makepyfile(test_plugin_cases=_PLUGIN_TESTS)
     report = pytester.path / "leaves.json"
     result = pytester.runpytest_inprocess(f"--leaf-report={report}")
-    result.assert_outcomes(passed=2)
+    result.assert_outcomes(passed=3)
     data = json.loads(report.read_text())
-    assert [(v["path"], v["reason"]) for v in data["violations"]] == [
-        (".value", "NumPy leaf")
-    ]
-    assert data["violations"][0]["constructions"] == 2
+    assert not data["errors"]
+    mixed, numpy_leaf = data["violations"]
+    assert mixed["path"] == "" and "canonical(tree, precision=" in mixed["reason"]
+    assert (numpy_leaf["path"], numpy_leaf["reason"], numpy_leaf["constructions"]) == (
+        ".value",
+        "NumPy leaf",
+        2,
+    )
     assert sorted(data["tests"]) == [
         "test_plugin_cases.py::test_inside_library_try",
         "test_plugin_cases.py::test_inside_raises",
+        "test_plugin_cases.py::test_mixed_fields",
     ]
     result.stdout.fnmatch_lines(["*test_plugin_cases.Raw.value: ndarray float64*x2"])
 
@@ -369,7 +462,7 @@ def test_bfloat16_is_flagged_like_float16(x64):
     """Exact count basis. Fails if a bfloat16 leaf passes as a float."""
     for dtype in (jnp.float16, jnp.bfloat16):
         found = check_tree(Held(jnp.ones(2, dtype=dtype)))
-        assert [v.reason for v in found] == ["float dtype is not active"], dtype
+        assert [v.reason for v in found] == ["unsupported floating dtype"], dtype
 
 
 _TWO_CPUS = """

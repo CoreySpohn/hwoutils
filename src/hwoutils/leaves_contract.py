@@ -9,11 +9,9 @@ which Equinox runs for every Module constructed, including subclasses with
 their own ``__check_init__``. The check inspects the non-static fields of
 each instance owned by the library under test (any class of its MRO defined
 in one of the library's packages) with :func:`hwoutils.leaves.check_tree`'s
-rule: a NumPy leaf, a Python number, a weakly typed array, or a float dtype
-other than the active one. Nested Modules are checked when they are built,
-not again inside their parent. The active dtype is read when the object is
-built, so a test that scopes ``jax.enable_x64()`` is checked against the
-precision in force there.
+rule: a NumPy leaf, a Python number, a weakly typed array, an unsupported
+floating dtype, or mixed working precision. Nested Modules are checked when
+they are built, not again inside their parent.
 
 The check records and never raises: a raise inside construction would be
 swallowed by a library ``try/except`` or matched by ``pytest.raises``. This
@@ -170,7 +168,7 @@ class LeafContract:
                 return
             cls = type(module)
             self.constructed.add(cls)
-            for v in _check(module, lambda _: False, ()):
+            for v in _check(module, lambda _: False, (), report_mixed=True):
                 entry = (_name(cls), v.path, v.type, v.dtype, v.reason)
                 self.by_field[entry] += 1
                 self.by_test[self.current].append(entry)

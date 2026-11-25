@@ -1,7 +1,7 @@
 """Leaf converters, leaf checks and the static host grid for Equinox models.
 
-Every leaf of a model is a ``jax.Array``. Floating leaves have the active
-float dtype (:func:`hwoutils.precision.float_dtype`) and a strong type;
+Every numeric leaf of a model is a ``jax.Array``. Floating leaves share
+the model precision and have a strong type;
 integer and boolean leaves keep their kind. NumPy arrays, NumPy scalars and
 Python numbers are never leaves: a Python number lives on a ``static=True``
 field or is converted. Conversion is declared on the field::
@@ -38,7 +38,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from hwoutils.precision import complex_of, float_dtype
+from hwoutils.precision import (
+    PrecisionError,
+    _as_inexact_array,
+    _precision_of_leaves,
+    complex_of,
+    float_dtype,
+    require_float64,
+)
 
 __all__ = [
     "FOREIGN_PACKAGES",
@@ -52,6 +59,7 @@ __all__ = [
     "canonical",
     "check_tree",
     "is_data",
+    "is_foreign",
     "is_owned",
     "is_param",
     "is_traced",
@@ -139,32 +147,73 @@ def _source_dtype(x) -> np.dtype:
     dtype = getattr(x, "dtype", None)
     if dtype is not None:
         return np.dtype(dtype)
+    # A nested sequence can contain tracers even though it has no dtype itself.
     leaves = jax.tree.leaves(x)
     if any(is_traced(leaf) for leaf in leaves):
         return jnp.result_type(*leaves)
     return np.asarray(x).dtype
 
 
-def as_float_leaf(x: Any) -> jax.Array:
-    """Convert a physical quantity to a strong float leaf of the active dtype.
+def _cast_inexact(x, source, target):
+    """Cast to a strong real or complex dtype and check concrete narrowing."""
+    if source == np.dtype(object):
+        try:
+            x = np.asarray(x, dtype=np.complex128 if target.kind == "c" else np.float64)
+        except (OverflowError, TypeError, ValueError) as err:
+            raise ValueError(
+                f"{reprlib.repr(x)} does not fit a {target.name} leaf: {err}"
+            ) from err
+        source = x.dtype
+    with np.errstate(over="ignore", under="ignore"):
+        out = _as_inexact_array(x, target)
+    if source == target or is_traced(out) or not jnp.issubdtype(source, jnp.inexact):
+        return out
+    real = jnp.finfo(target)
+    if jnp.finfo(source).bits <= real.bits:
+        return out
+    host, got = np.asarray(x), np.asarray(out)
+    # Check real and imaginary parts separately: a surviving real part can
+    # hide an imaginary part that underflowed, and conversely.
+    components = [(host.real, got.real)]
+    if np.iscomplexobj(host):
+        components.append((host.imag, got.imag))
+    for before, after in components:
+        finite = np.isfinite(before)
+        if (finite & ~np.isfinite(after)).any():
+            raise ValueError(
+                f"finite values do not fit {target.name}, which holds up to "
+                f"{float(real.max):.3e}; choose a wider precision or rescale "
+                "the quantity"
+            )
+        if (finite & (before != 0) & (after == 0)).any():
+            raise ValueError(
+                f"nonzero values underflow to zero in {target.name}, whose "
+                f"smallest positive value is {float(real.smallest_subnormal):.3e}; "
+                "choose a wider precision or rescale the quantity"
+            )
+    return out
 
-    Accepts arrays, scalars and nested sequences, NumPy or JAX, integer or
-    floating. Tracers are converted the same way. For a field declared
-    ``eqx.field(converter=as_float_leaf)``.
+
+def _strong_array(x):
+    return isinstance(x, jax.Array) and not x.weak_type
+
+
+def as_float_leaf(x: Any) -> jax.Array:
+    """Convert a physical quantity to a strong real floating leaf.
+
+    A strongly typed JAX floating array or tracer retains its dtype. Python
+    numbers, NumPy values, nested sequences, integers and weak JAX values
+    take the construction default.
 
     Args:
         x: The value to store.
 
     Returns:
-        A strongly typed ``jax.Array`` of ``float_dtype()``.
+        A strongly typed floating JAX array.
 
     Raises:
-        TypeError: If ``x`` is complex (use :func:`as_complex_leaf`) or a typed
-            PRNG key (declare the field without a converter).
-        ValueError: If a concrete finite ``x`` becomes infinite in the active
-            dtype (a float64 value or a huge Python integer beyond the float32
-            range under x32), or a nonzero finite ``x`` underflows to zero.
-            Tracers are not checked.
+        TypeError: If the input is complex or a typed PRNG key.
+        ValueError: If a concrete finite value overflows or underflows to zero.
     """
     _refuse_key(x, "as_float_leaf")
     source = _source_dtype(x)
@@ -173,56 +222,34 @@ def as_float_leaf(x: Any) -> jax.Array:
             "a complex value cannot be stored on a real field; declare the "
             "field with as_complex_leaf"
         )
-    wide = source == np.dtype(object) and not is_traced(x)
-    if wide:
-        try:
-            host = np.asarray(x, dtype=np.float64)
-        except (OverflowError, TypeError, ValueError) as err:
-            raise ValueError(
-                f"{reprlib.repr(x)} does not fit a float leaf: {err}"
-            ) from err
-        x = host
-    with np.errstate(over="ignore"):
-        out = jnp.asarray(x, dtype=float_dtype())
-    if (
-        (
-            wide
-            or (
-                np.issubdtype(source, np.floating)
-                and source.itemsize > out.dtype.itemsize
-            )
-        )
-        and not is_traced(x)
-        and not is_traced(out)
-    ):
-        host, got = np.asarray(x), np.asarray(out)
-        if (np.isfinite(host) & ~np.isfinite(got)).any():
-            raise ValueError(
-                f"finite values do not fit {out.dtype.name}, which holds up to "
-                f"{float(np.finfo(out.dtype).max):.3e}; enable x64, or rescale "
-                "the quantity"
-            )
-        if ((host != 0) & np.isfinite(host) & (got == 0)).any():
-            tiny = float(np.finfo(out.dtype).smallest_subnormal)
-            raise ValueError(
-                f"nonzero values underflow to zero in {out.dtype.name}, whose "
-                f"smallest positive value is {tiny:.3e}; "
-                "enable x64, or rescale the quantity"
-            )
-    return out
+    if _strong_array(x) and jnp.issubdtype(source, jnp.floating):
+        return x
+    return _cast_inexact(x, source, float_dtype())
 
 
 def as_complex_leaf(x: Any) -> jax.Array:
-    """Convert a value to a strong complex leaf of the active precision.
+    """Convert a value to a strong complex leaf at its construction precision.
+
+    Strong JAX complex arrays retain their dtype. A strong JAX float32 or
+    float64 array takes its complex partner. Other inputs use the default.
 
     Args:
         x: The value to store, real or complex.
 
     Returns:
-        A strongly typed complex ``jax.Array`` (complex128 under x64, else
-        complex64).
+        A strongly typed complex JAX array.
     """
-    return jnp.asarray(x, dtype=complex_of(float_dtype()))
+    _refuse_key(x, "as_complex_leaf")
+    source = _source_dtype(x)
+    target = float_dtype()
+    if _strong_array(x):
+        if np.issubdtype(source, np.complexfloating):
+            return x
+        if source == np.float64:
+            require_float64("as_complex_leaf")
+        if source in (np.float32, np.float64):
+            target = source
+    return _cast_inexact(x, source, complex_of(target))
 
 
 def _check_integer_range(x, target: np.dtype) -> None:
@@ -263,6 +290,10 @@ def as_leaf(x: Any) -> jax.Array:
         TypeError: If ``x`` is a typed PRNG key; declare the field without a
             converter.
     """
+    return _as_leaf(x, float_dtype())
+
+
+def _as_leaf(x, precision):
     _refuse_key(x, "as_leaf")
     source = _source_dtype(x)
     if source == np.dtype(object) and not is_traced(x):
@@ -281,35 +312,31 @@ def as_leaf(x: Any) -> jax.Array:
         ):
             _check_integer_range(x, target)
     elif np.issubdtype(source, np.complexfloating):
-        target = complex_of(float_dtype())
+        return _cast_inexact(x, source, complex_of(precision))
     else:
-        target = float_dtype()
+        return _cast_inexact(x, source, precision)
     return jnp.asarray(x, dtype=target)
 
 
 def as_bulk_leaf(x: Any) -> jax.Array:
-    """Convert a bulk data cube, keeping a floating dtype narrower than active.
+    """Store a real or complex bulk table, preserving a narrower input dtype.
 
-    For declared bulk cubes only (a contrast or disk cube delivered as
-    float32): under x64 a float32 input stays float32 and its reader promotes
-    at use. Any other input becomes a float leaf of the active dtype, so under
-    x32 this is :func:`as_float_leaf`.
+    Readers cast the stored table with ``like(table, owner)`` at use.
 
     Args:
-        x: The cube to store.
+        x: The table to store.
 
     Returns:
-        A strongly typed floating ``jax.Array``.
-
-    Raises:
-        TypeError: If ``x`` is complex.
+        A strongly typed floating or complex JAX array.
     """
+    _refuse_key(x, "as_bulk_leaf")
     source = _source_dtype(x)
+    target = float_dtype()
     if np.issubdtype(source, np.complexfloating):
-        raise TypeError("a bulk cube must be real")
-    if np.issubdtype(source, np.floating) and source.itemsize < float_dtype().itemsize:
-        return jnp.asarray(x, dtype=source)
-    return jnp.asarray(x, dtype=float_dtype())
+        target = complex_of(target)
+    if jnp.issubdtype(source, jnp.inexact) and source.itemsize < target.itemsize:
+        target = source
+    return _cast_inexact(x, source, target)
 
 
 class LeafViolation(NamedTuple):
@@ -374,7 +401,7 @@ def _walk(
 
     A Module for which ``enter`` is False is skipped with its whole subtree.
     A leaf under a field declared with ``as_bulk_leaf``, or under a path in
-    ``bulk``, may keep a narrower float dtype.
+    ``bulk``, may keep its storage dtype.
     """
     stack = [((), tree, False)]
     while stack:
@@ -397,7 +424,7 @@ def _walk(
 
 
 def _violation(path, leaf, allowed: bool) -> LeafViolation | None:
-    """Return the violation of one leaf against the active precision, or None."""
+    """Return the violation of one leaf against the leaf type rules, or None."""
     name = jax.tree_util.keystr(path)
     kind = type(leaf).__name__
     if isinstance(leaf, np.ndarray | np.generic):
@@ -411,18 +438,29 @@ def _violation(path, leaf, allowed: bool) -> LeafViolation | None:
     dtype = np.dtype(leaf.dtype)
     if getattr(leaf, "weak_type", False):
         return LeafViolation(name, kind, dtype.name, "weakly typed leaf")
-    if np.issubdtype(dtype, np.complexfloating) and dtype != complex_of(float_dtype()):
-        return LeafViolation(name, kind, dtype.name, "complex dtype is not active")
-    if jnp.issubdtype(dtype, jnp.floating) and dtype != float_dtype():
-        if not (allowed and dtype.itemsize < float_dtype().itemsize):
-            return LeafViolation(name, kind, dtype.name, "float dtype is not active")
+    if (
+        not allowed
+        and jnp.issubdtype(dtype, jnp.inexact)
+        and dtype not in (np.float32, np.float64, np.complex64, np.complex128)
+    ):
+        return LeafViolation(name, kind, dtype.name, "unsupported floating dtype")
     return None
 
 
-def _check(tree, enter, bulk) -> tuple[LeafViolation, ...]:
-    bulk = frozenset(bulk)
-    found = (_violation(path, leaf, ok) for path, leaf, ok in _walk(tree, enter, bulk))
-    return tuple(v for v in found if v is not None)
+def _check(tree, enter, bulk, *, report_mixed=False) -> tuple[LeafViolation, ...]:
+    leaves = list(_walk(tree, enter, frozenset(bulk)))
+    found = [
+        issue
+        for path, leaf, allowed in leaves
+        if (issue := _violation(path, leaf, allowed)) is not None
+    ]
+    try:
+        _precision_of_leaves(leaf for _, leaf, allowed in leaves if not allowed)
+    except PrecisionError as error:
+        if not report_mixed:
+            raise
+        found.append(LeafViolation("", type(tree).__name__, "", str(error)))
+    return tuple(found)
 
 
 def check_tree(
@@ -431,10 +469,10 @@ def check_tree(
     """Return the leaves of a tree that break the leaf rule.
 
     A violation is a NumPy array or scalar, a Python number, a weakly typed
-    array, or a floating (float16 and bfloat16 included) or complex array
-    whose dtype is not the active one. A typed PRNG key is a valid leaf.
+    array, or an unsupported floating dtype (including float16 and bfloat16).
+    A typed PRNG key is a valid leaf.
     A leaf under a field declared with ``as_bulk_leaf``, or at a path named in
-    ``bulk``, may keep a narrower float dtype. The walk enters a nested Module
+    ``bulk``, may keep its storage dtype. The walk enters a nested Module
     only when it is owned (:func:`is_owned` over :data:`OWNED_PACKAGES` and
     ``owned``); the root is always checked.
 
@@ -445,16 +483,32 @@ def check_tree(
 
     Returns:
         The violations, in tree order; empty when the tree follows the rule.
+
+    Raises:
+        PrecisionError: If non-bulk leaves disagree on precision.
     """
     packages = OWNED_PACKAGES | frozenset(owned)
     return _check(tree, lambda module: is_owned(module, packages), bulk)
 
 
-def _is_foreign(module, foreign: frozenset[str]) -> bool:
-    if isinstance(module, eqx.Partial):
+def is_foreign(module: Any, foreign: Iterable[str] = ()) -> bool:
+    """Return whether a Module is opaque to canonicalization and entry checks.
+
+    Args:
+        module: Any pytree node.
+        foreign: Extra package or dotted module names to skip.
+
+    Returns:
+        Whether the Module belongs to a foreign package. Equinox Partial
+        always exposes its bound arguments.
+    """
+    if not isinstance(module, eqx.Module) or isinstance(module, eqx.Partial):
         return False
     name = type(module).__module__
-    return any(name == f or name.startswith(f + ".") for f in foreign)
+    return any(
+        name == f or name.startswith(f + ".")
+        for f in FOREIGN_PACKAGES | frozenset(foreign)
+    )
 
 
 def require_tree(
@@ -472,10 +526,13 @@ def require_tree(
         foreign: Extra third-party package names whose Modules are skipped.
 
     Raises:
-        TypeError: If any leaf breaks the rule, naming each path.
+        TypeError: If a leaf breaks the type rules, naming each path.
+        PrecisionError: If non-bulk leaves disagree on precision.
     """
-    skip = FOREIGN_PACKAGES | frozenset(foreign)
-    found = _check(tree, lambda module: not _is_foreign(module, skip), bulk)
+    foreign = frozenset(foreign)
+    if is_foreign(tree, foreign):
+        return
+    found = _check(tree, lambda module: not is_foreign(module, foreign), bulk)
     if found:
         lines = "\n".join(
             f"  {v.path or '<root>'}: {v.type}"
@@ -484,7 +541,7 @@ def require_tree(
             for v in found
         )
         raise TypeError(
-            "the model holds leaves that are not JAX arrays of the active "
+            "the model holds leaves that are not strong JAX arrays of supported "
             "precision; build it through its constructors, or pass replacement "
             f"values through as_float_leaf or as_leaf:\n{lines}"
         )
@@ -496,36 +553,42 @@ def _is_number(x) -> bool:
     return is_data(x) or isinstance(x, _PYTHON_NUMBERS)
 
 
-def canonical(tree: Any, *, device: Any = None, foreign: Iterable[str] = ()) -> Any:
-    """Map every numeric leaf of a tree through :func:`as_leaf`.
+def canonical(
+    tree: Any, *, precision=None, device: Any = None, foreign: Iterable[str] = ()
+) -> Any:
+    """Cast every numeric leaf, including bulk storage, to a strong JAX array.
 
-    For the ``eqx.tree_at`` and table I/O boundaries. Floats go to the active
-    dtype, integers and booleans keep their kind, Python numbers become
-    arrays. A leaf under a field declared with ``as_bulk_leaf`` goes through
-    that converter. Modules of third-party packages (:data:`FOREIGN_PACKAGES`
-    and ``foreign``) are returned unchanged.
+    Floating and complex leaves share the requested real precision. Integers
+    and booleans keep their kind. Typed keys and foreign Modules pass through.
 
     Args:
         tree: Any pytree.
-        device: Device or sharding to place the leaves on; the default device
-            when None. Given, each leaf is converted on that device (on the
-            lowest-id device of a sharding) and placed once, so nothing is
-            staged on the default device and no other backend is needed.
+        precision: Float32 or float64 dtype or name. Defaults to the
+            construction precision.
+        device: Device or sharding on which to stage and place the arrays.
         foreign: Extra third-party package names whose Modules are kept as is.
 
     Returns:
         The tree with canonical leaves.
+
+    Raises:
+        PrecisionError: If the requested precision is unsupported or unavailable.
+        ValueError: If a concrete value overflows or underflows to zero.
     """
-    skip = FOREIGN_PACKAGES | frozenset(foreign)
+    try:
+        dtype = float_dtype() if precision is None else np.dtype(precision)
+    except TypeError as error:
+        raise PrecisionError(
+            f"Expected float32 or float64, got {precision!r}."
+        ) from error
+    if dtype not in (np.float32, np.float64):
+        raise PrecisionError(f"Expected float32 or float64, got {dtype}.")
+    if dtype == np.float64:
+        require_float64("canonical")
+    foreign = frozenset(foreign)
 
     def stop(x):
-        return isinstance(x, eqx.Module) and _is_foreign(x, skip)
-
-    bulk = {
-        path
-        for path, _, allowed in _walk(tree, lambda m: not stop(m), frozenset())
-        if allowed
-    }
+        return is_foreign(x, foreign)
 
     if device is None:
         staging = contextlib.nullcontext()
@@ -536,14 +599,14 @@ def canonical(tree: Any, *, device: Any = None, foreign: Iterable[str] = ()) -> 
             stage = min(device.device_set, key=lambda d: d.id)
         staging = jax.default_device(stage)
 
-    def convert(path, leaf):
+    def convert(leaf):
         if stop(leaf) or not _is_number(leaf):
             return leaf
         with staging:
-            out = as_bulk_leaf(leaf) if path in bulk else as_leaf(leaf)
+            out = _as_leaf(leaf, dtype)
         return out if device is None else jax.device_put(out, device)
 
-    return jax.tree_util.tree_map_with_path(convert, tree, is_leaf=stop)
+    return jax.tree.map(convert, tree, is_leaf=stop)
 
 
 class HostGrid:
