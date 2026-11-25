@@ -39,14 +39,24 @@ def float_dtype() -> np.dtype:
     return np.dtype(jax.dtypes.canonicalize_dtype(np.float64))
 
 
+def dtype_tag() -> str:
+    """Return a short cache key for the active float dtype.
+
+    Returns:
+        ``"f64"`` when the active float dtype is 8 bytes wide, else ``"f32"``.
+    """
+    return "f64" if float_dtype().itemsize == 8 else "f32"
+
+
 def precision_of(tree) -> np.dtype:
     """Find the common real precision outside bulk fields and foreign Modules.
 
     Args:
-        tree: An array or pytree. Python floats use the construction default.
+        tree: An array or pytree. Only strong JAX floating and complex leaves
+            supply a precision.
 
     Returns:
-        The real dtype, or the construction default for a tree without floats.
+        The real dtype, or the construction default when no leaf supplies one.
 
     Raises:
         PrecisionError: If floating leaves have different real precisions.
@@ -59,15 +69,16 @@ def precision_of(tree) -> np.dtype:
     return _precision_of_leaves(leaf for _, leaf, bulk in leaves if not bulk)
 
 
+def _strong_array(x):
+    return isinstance(x, jax.Array) and not getattr(x, "weak_type", False)
+
+
 def _precision_of_leaves(leaves) -> np.dtype:
-    precisions = set()
-    for leaf in leaves:
-        dtype = getattr(leaf, "dtype", None)
-        if dtype is None:
-            if isinstance(leaf, float | complex):
-                precisions.add(float_dtype())
-        elif isinstance(dtype, np.dtype) and jnp.issubdtype(dtype, jnp.inexact):
-            precisions.add(jnp.finfo(dtype).dtype)
+    precisions = {
+        jnp.finfo(leaf.dtype).dtype
+        for leaf in leaves
+        if _strong_array(leaf) and jnp.issubdtype(leaf.dtype, jnp.inexact)
+    }
     if len(precisions) > 1:
         raise PrecisionError(
             "Mixed floating precisions. Use canonical(tree, precision=...) "

@@ -26,7 +26,12 @@ def test_owner_precision(x64):
         assert hwoutils.float_dtype() == real
         assert hwoutils.precision_of(tree) == real
         assert hwoutils.complex_of(real) == partner
-        tree["other"] = np.ones(1, np.float32 if x64 else np.float64)
+        host = (np.ones(1, np.float32 if x64 else np.float64), 1.0, jnp.asarray(1.0))
+        assert hwoutils.precision_of(host) == real
+        for value in host:
+            assert hwoutils.precision_of((jnp.float32(1), value)) == np.float32
+        with jax.enable_x64(True):
+            tree["other"] = jnp.ones(1, np.float32 if x64 else np.float64)
         with pytest.raises(hwoutils.PrecisionError, match="canonical"):
             hwoutils.precision_of(tree)
 
@@ -36,8 +41,10 @@ def test_like_follows_reference(x64):
     """Fails if host constants widen a narrow owner or lose the imaginary part."""
     with jax.enable_x64(x64):
         if not x64:
+            with jax.enable_x64(True):
+                wide_ref = jnp.float64(1)
             with pytest.raises(hwoutils.PrecisionError, match="x64"):
-                hwoutils.like(1, np.float64(1))
+                hwoutils.like(1, wide_ref)
         for real in [np.float32, np.float64] if x64 else [np.float32]:
             ref = jnp.ones(2, real)
             c = jax.jit(hwoutils.like)(2 + 3j, ref)
@@ -70,6 +77,7 @@ import os
 from hwoutils import precision, jax_config
 assert precision.enable_x64 is jax_config.enable_x64
 assert precision.float_dtype is jax_config.float_dtype
+assert precision.dtype_tag is jax_config.dtype_tag
 for flag in (True, False):
     jax_config.enable_x64(flag)
     assert precision.float_dtype().itemsize == (8 if flag else 4)

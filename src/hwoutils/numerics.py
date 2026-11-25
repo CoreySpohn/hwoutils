@@ -23,7 +23,7 @@ def _working_dtype(*values, dtype=None):
         return dtype
     dtypes = (jnp.asarray(x).dtype for x in values)
     real = (jnp.finfo(d).dtype for d in dtypes if jnp.issubdtype(d, jnp.inexact))
-    return min(real, key=lambda d: d.itemsize, default=None) or float_dtype()
+    return min(real, key=lambda d: d.itemsize, default=float_dtype())
 
 
 def eps(x_or_dtype) -> float:
@@ -172,6 +172,22 @@ def within(x, low, high, *, ulps=4):
     return (low <= high) & (low - slack <= x) & (x <= high + slack)
 
 
+def same_tolerance(a, *, ulps=4, floor=0.0):
+    """Return the host merge threshold at the magnitude of each value.
+
+    Args:
+        a: Real scalar or array.
+        ulps: Number of spacings in the coarsest supported precision.
+        floor: Minimum absolute threshold in the units of the input.
+
+    Returns:
+        Float64 tolerance with the shape of the input.
+    """
+    magnitude = np.abs(np.asarray(a, dtype=np.float64)).astype(COARSEST)
+    spacing = np.spacing(magnitude).astype(np.float64)
+    return np.maximum(ulps * spacing, floor)
+
+
 @overload
 def same(a: float, b: float, *, ulps=4, floor=0.0) -> bool: ...
 
@@ -197,9 +213,7 @@ def same(a, b, *, ulps=4, floor=0.0):
         A bool for scalars, or a boolean array for broadcast operands.
     """
     a, b = np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64)
-    magnitude = np.maximum(np.abs(a), np.abs(b)).astype(COARSEST)
-    spacing = np.spacing(magnitude).astype(np.float64)
-    tolerance = np.maximum(ulps * spacing, floor)
+    tolerance = same_tolerance(np.maximum(np.abs(a), np.abs(b)), ulps=ulps, floor=floor)
     result = (a == b) | (np.abs(a - b) < tolerance)
     return bool(result) if result.ndim == 0 else result
 

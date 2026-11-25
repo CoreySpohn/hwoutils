@@ -42,6 +42,7 @@ from hwoutils.precision import (
     PrecisionError,
     _as_inexact_array,
     _precision_of_leaves,
+    _strong_array,
     complex_of,
     float_dtype,
     require_float64,
@@ -194,16 +195,11 @@ def _cast_inexact(x, source, target):
     return out
 
 
-def _strong_array(x):
-    return isinstance(x, jax.Array) and not x.weak_type
-
-
 def as_float_leaf(x: Any) -> jax.Array:
     """Convert a physical quantity to a strong real floating leaf.
 
-    A strongly typed JAX floating array or tracer retains its dtype. Python
-    numbers, NumPy values, nested sequences, integers and weak JAX values
-    take the construction default.
+    Strong JAX float32 and float64 arrays and tracers retain their dtype.
+    Other real inputs take the construction default.
 
     Args:
         x: The value to store.
@@ -213,6 +209,7 @@ def as_float_leaf(x: Any) -> jax.Array:
 
     Raises:
         TypeError: If the input is complex or a typed PRNG key.
+        PrecisionError: If a strong float64 input requires x64.
         ValueError: If a concrete finite value overflows or underflows to zero.
     """
     _refuse_key(x, "as_float_leaf")
@@ -222,7 +219,9 @@ def as_float_leaf(x: Any) -> jax.Array:
             "a complex value cannot be stored on a real field; declare the "
             "field with as_complex_leaf"
         )
-    if _strong_array(x) and jnp.issubdtype(source, jnp.floating):
+    if _strong_array(x) and source in (np.float32, np.float64):
+        if source == np.float64:
+            require_float64("as_float_leaf")
         return x
     return _cast_inexact(x, source, float_dtype())
 
@@ -243,10 +242,10 @@ def as_complex_leaf(x: Any) -> jax.Array:
     source = _source_dtype(x)
     target = float_dtype()
     if _strong_array(x):
+        if source in (np.float64, np.complex128):
+            require_float64("as_complex_leaf")
         if np.issubdtype(source, np.complexfloating):
             return x
-        if source == np.float64:
-            require_float64("as_complex_leaf")
         if source in (np.float32, np.float64):
             target = source
     return _cast_inexact(x, source, complex_of(target))
@@ -293,9 +292,13 @@ def as_leaf(x: Any) -> jax.Array:
     return _as_leaf(x, float_dtype())
 
 
-def _as_leaf(x, precision):
+def _as_leaf(x, precision, *, bulk=False):
     _refuse_key(x, "as_leaf")
     source = _source_dtype(x)
+    if bulk and jnp.issubdtype(source, jnp.inexact):
+        return _as_bulk_leaf(x, source, precision)
+    if precision is None:
+        precision = float_dtype()
     if source == np.dtype(object) and not is_traced(x):
         values = np.asarray(x, dtype=object)
         if values.size and all(isinstance(v, int) for v in values.ravel()):
@@ -330,12 +333,22 @@ def as_bulk_leaf(x: Any) -> jax.Array:
         A strongly typed floating or complex JAX array.
     """
     _refuse_key(x, "as_bulk_leaf")
-    source = _source_dtype(x)
-    target = float_dtype()
+    return _as_bulk_leaf(x, _source_dtype(x), float_dtype())
+
+
+def _as_bulk_leaf(x, source, precision):
+    """Retain floating storage when no narrower precision was requested."""
+    if jnp.issubdtype(source, jnp.inexact):
+        storage = jnp.finfo(source).dtype
+        if precision is None or storage.itemsize <= precision.itemsize:
+            if _strong_array(x):
+                return x
+            if storage == np.float64:
+                require_float64("64-bit bulk storage")
+            return _cast_inexact(x, source, source)
+    target = float_dtype() if precision is None else precision
     if np.issubdtype(source, np.complexfloating):
         target = complex_of(target)
-    if jnp.issubdtype(source, jnp.inexact) and source.itemsize < target.itemsize:
-        target = source
     return _cast_inexact(x, source, target)
 
 
@@ -454,6 +467,8 @@ def _check(tree, enter, bulk, *, report_mixed=False) -> tuple[LeafViolation, ...
         for path, leaf, allowed in leaves
         if (issue := _violation(path, leaf, allowed)) is not None
     ]
+    if found and not report_mixed:
+        return tuple(found)
     try:
         _precision_of_leaves(leaf for _, leaf, allowed in leaves if not allowed)
     except PrecisionError as error:
@@ -556,10 +571,11 @@ def _is_number(x) -> bool:
 def canonical(
     tree: Any, *, precision=None, device: Any = None, foreign: Iterable[str] = ()
 ) -> Any:
-    """Cast every numeric leaf, including bulk storage, to a strong JAX array.
+    """Cast numeric leaves to strong JAX arrays, preserving narrow bulk storage.
 
-    Floating and complex leaves share the requested real precision. Integers
-    and booleans keep their kind. Typed keys and foreign Modules pass through.
+    Working leaves share the requested real precision. Bulk tables retain their
+    storage dtype unless an explicit precision narrows them. Integers and
+    booleans keep their kind. Typed keys and foreign Modules pass through.
 
     Args:
         tree: Any pytree.
@@ -599,14 +615,24 @@ def canonical(
             stage = min(device.device_set, key=lambda d: d.id)
         staging = jax.default_device(stage)
 
-    def convert(leaf):
+    if stop(tree):
+        return tree
+    bulk_paths = {
+        path
+        for path, _, bulk in _walk(tree, lambda node: not stop(node), frozenset())
+        if bulk
+    }
+
+    requested = None if precision is None else dtype
+
+    def convert(path, leaf):
         if stop(leaf) or not _is_number(leaf):
             return leaf
         with staging:
-            out = _as_leaf(leaf, dtype)
+            out = _as_leaf(leaf, requested, bulk=path in bulk_paths)
         return out if device is None else jax.device_put(out, device)
 
-    return jax.tree.map(convert, tree, is_leaf=stop)
+    return jax.tree.map_with_path(convert, tree, is_leaf=stop)
 
 
 class HostGrid:

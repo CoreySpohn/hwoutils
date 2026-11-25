@@ -35,10 +35,12 @@ print(disk.radius_au.dtype, disk.mask.dtype)
 print(check_tree(disk))
 ```
 
-`as_float_leaf` keeps the dtype of a strong JAX float, including a tracer. Python numbers, NumPy
-values, nested sequences, weak arrays and integers take the construction default (float64 with x64
-enabled, float32 otherwise). `as_complex_leaf` applies the same rule with the matching complex dtype.
-`as_leaf` keeps the numeric kind and checks that an integer fits JAX's integer width.
+`as_float_leaf` keeps the dtype of a strong JAX float32 or float64 array, including a tracer.
+Python numbers, NumPy values, nested sequences, weak arrays, float16, bfloat16 and integers take
+the construction default (float64 with x64 enabled, float32 otherwise). `as_complex_leaf` applies
+the same rule with the matching complex dtype. Both converters require x64 when given a strong
+input with 64-bit real precision. `as_leaf` keeps the numeric kind and checks that an integer fits
+JAX's integer width.
 
 Declare a large real or complex table with `as_bulk_leaf` to preserve narrow storage. A float32 or
 complex64 table stays narrow under x64. Its reader uses `hwoutils.like(table, owner)` to cast it to
@@ -91,11 +93,13 @@ except TypeError as error:
     print(str(error).splitlines()[0][:40])
 ```
 
-A model can use float32 with x64 enabled. Both checks raise `hwoutils.PrecisionError` when non-bulk
-leaves disagree on precision. Use `canonical(model, precision="float32")` or
-`canonical(model, precision="float64")` from `hwoutils.leaves` to cast the entire model, including
-bulk tables. Omitting `precision` chooses the construction default. Narrowing checks each real and
-imaginary component for range loss. Widening float32 values to float64 is exact and requires x64.
+A model can use float32 with x64 enabled. Once the leaf types are valid, both checks raise
+`hwoutils.PrecisionError` if strong non-bulk floating or complex leaves disagree on real precision.
+Use `canonical(model, precision="float32")` or `canonical(model, precision="float64")` from
+`hwoutils.leaves` to cast the model. An explicit precision caps the width of bulk tables.
+Omitting `precision` keeps their storage dtype and chooses the construction default for working
+leaves. Narrowing checks each real and imaginary component for range loss. Widening float32 values
+to float64 is exact and requires x64.
 
 The check flags NumPy leaves, Python numbers, weakly typed arrays, and unsupported working dtypes
 (including float16 and bfloat16). Typed PRNG keys and integer and boolean arrays

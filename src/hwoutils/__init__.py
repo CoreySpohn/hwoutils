@@ -13,24 +13,15 @@ except ModuleNotFoundError:
     __version__ = "unknown"
 
 _EXPORTS = {
-    "COARSEST": "numerics",
     "PrecisionError": "precision",
     "complex_of": "precision",
     "enable_x64": "precision",
-    "eps": "numerics",
     "float_dtype": "precision",
-    "is_uniform": "numerics",
-    "isclose": "numerics",
     "like": "precision",
     "precision_of": "precision",
     "require_float64": "precision",
-    "roundoff": "numerics",
-    "same": "numerics",
     "set_host_device_count": "jax_config",
     "set_platform": "jax_config",
-    "sum_roundoff": "numerics",
-    "ulp": "numerics",
-    "within": "numerics",
 }
 
 __all__ = ["__version__", *_EXPORTS]

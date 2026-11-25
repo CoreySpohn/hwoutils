@@ -10,17 +10,9 @@ import re
 
 import jax
 
+from hwoutils.precision import dtype_tag as dtype_tag
 from hwoutils.precision import enable_x64 as enable_x64
 from hwoutils.precision import float_dtype as float_dtype
-
-
-def dtype_tag() -> str:
-    """Return a short cache key for the active float dtype.
-
-    Returns:
-        ``"f64"`` when the active float dtype is 8 bytes wide, else ``"f32"``.
-    """
-    return "f64" if float_dtype().itemsize == 8 else "f32"
 
 
 def set_platform(platform: str | None = None) -> None:

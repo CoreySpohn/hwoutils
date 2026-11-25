@@ -106,6 +106,8 @@ def test_as_float_leaf_is_strong_and_active(x64):
         3,
         jnp.asarray(1.0),
         np.array([1.0, 2.0], dtype=np.float32),
+        jnp.float16(1),
+        jnp.bfloat16(1),
     ]
     for value in inputs:
         assert _strong(as_float_leaf(value), float_dtype()), value
@@ -165,6 +167,30 @@ def test_check_tree_finds_each_violation_once():
             assert check_tree(canonical(Held(value))) == ()
 
 
+def test_numpy_leaf_in_float32_model(x64):
+    """The NumPy violation reaches the entry point with its full field path."""
+    model = Held((jnp.float32(1), np.ones(2, dtype=np.float64)))
+    assert [(v.path, v.reason) for v in check_tree(model)] == [
+        (".value[1]", "NumPy leaf")
+    ]
+    with pytest.raises(TypeError, match=r"\.value\[1\].*\(NumPy leaf\)"):
+        require_tree(model)
+
+
+def test_unavailable_strong_precision():
+    """A wide array built in an earlier scope needs x64 on reconstruction."""
+    with jax.enable_x64(True):
+        real, field = jnp.float64(1), jnp.complex128(1j)
+    with jax.enable_x64(False):
+        for convert, value in [
+            (as_float_leaf, real),
+            (as_complex_leaf, real),
+            (as_complex_leaf, field),
+        ]:
+            with pytest.raises(PrecisionError, match="x64"):
+                convert(value)
+
+
 def test_converter_preserves_strong_arrays_and_tracers(x64):
     """Strong fields retain their dtype when an Equinox model is rebuilt."""
     for fn, dtype in [(as_float_leaf, jnp.float32), (as_complex_leaf, jnp.complex64)]:
@@ -197,8 +223,27 @@ def test_bulk_reader_and_owner_precision(x64):
     read = like(cube.cube, tree)
     assert _strong(read, np.complex128 if x64 else np.complex64)
     np.testing.assert_array_equal(read, data)
-    assert canonical(tree)[0].cube.dtype == read.dtype
-    assert _strong(Cube(data.real).cube, np.float32)
+    mask = eqx.tree_at(lambda module: module.cube, cube, np.array([True]))
+    assert _strong(canonical(mask).cube, np.bool_)
+    for table in (data, data.real):
+        packed = Cube(table)
+        mixed = (packed, packed.cube)
+        for requested in (None, float_dtype()):
+            stored, working = canonical(mixed, precision=requested)
+            assert _strong(stored.cube, table.dtype)
+            assert working.dtype == (
+                read.dtype if np.iscomplexobj(table) else float_dtype()
+            )
+            np.testing.assert_array_equal(stored.cube, table)
+        if x64:
+            wide = Cube(
+                table.astype(np.complex128 if np.iscomplexobj(table) else np.float64)
+            )
+            with jax.enable_x64(False):
+                assert canonical(wide).cube.dtype == wide.cube.dtype
+            narrowed = canonical(wide, precision="float32").cube
+            assert _strong(narrowed, table.dtype)
+            np.testing.assert_array_equal(narrowed, table)
 
 
 def test_mixed_tree_and_explicit_canonical_round_trip(x64):
@@ -240,6 +285,9 @@ def test_range_refusal_checks_each_component(x64):
     for value, message in [(1e100, "do not fit"), (1e-100, "underflow")]:
         for data in [np.array([value]), np.array([complex(3, value)])]:
             inputs = [data, jnp.asarray(data)] if x64 else [data]
+            if x64:
+                with pytest.raises(ValueError, match=message):
+                    canonical(Cube(data), precision="float32")
             for value_to_cast in inputs:
                 with pytest.raises(ValueError, match=message):
                     canonical(value_to_cast, precision="float32")
