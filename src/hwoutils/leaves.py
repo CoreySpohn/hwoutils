@@ -143,6 +143,9 @@ def _source_dtype(x) -> np.dtype:
     dtype = getattr(x, "dtype", None)
     if dtype is not None:
         return np.dtype(dtype)
+    leaves = jax.tree.leaves(x)
+    if any(is_traced(leaf) for leaf in leaves):
+        return jnp.result_type(*leaves)
     return np.asarray(x).dtype
 
 
