@@ -1,7 +1,7 @@
 """Leaf converters, leaf checks and the static host grid for Equinox models.
 
 Every leaf of a model is a ``jax.Array``. Floating leaves have the active
-float dtype (:func:`hwoutils.jax_config.float_dtype`) and a strong type;
+float dtype (:func:`hwoutils.precision.float_dtype`) and a strong type;
 integer and boolean leaves keep their kind. NumPy arrays, NumPy scalars and
 Python numbers are never leaves: a Python number lives on a ``static=True``
 field or is converted. Conversion is declared on the field::
@@ -38,7 +38,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from hwoutils.jax_config import float_dtype
+from hwoutils.precision import complex_of, float_dtype
 
 __all__ = [
     "FOREIGN_PACKAGES",
@@ -134,10 +134,6 @@ def _refuse_key(x, helper: str) -> None:
         )
 
 
-def _complex_dtype() -> np.dtype:
-    return np.dtype(jax.dtypes.canonicalize_dtype(np.complex128))
-
-
 def _source_dtype(x) -> np.dtype:
     """Dtype of an array, scalar or nested sequence, without a device copy."""
     dtype = getattr(x, "dtype", None)
@@ -226,7 +222,7 @@ def as_complex_leaf(x: Any) -> jax.Array:
         A strongly typed complex ``jax.Array`` (complex128 under x64, else
         complex64).
     """
-    return jnp.asarray(x, dtype=_complex_dtype())
+    return jnp.asarray(x, dtype=complex_of(float_dtype()))
 
 
 def _check_integer_range(x, target: np.dtype) -> None:
@@ -285,7 +281,7 @@ def as_leaf(x: Any) -> jax.Array:
         ):
             _check_integer_range(x, target)
     elif np.issubdtype(source, np.complexfloating):
-        target = _complex_dtype()
+        target = complex_of(float_dtype())
     else:
         target = float_dtype()
     return jnp.asarray(x, dtype=target)
@@ -415,7 +411,7 @@ def _violation(path, leaf, allowed: bool) -> LeafViolation | None:
     dtype = np.dtype(leaf.dtype)
     if getattr(leaf, "weak_type", False):
         return LeafViolation(name, kind, dtype.name, "weakly typed leaf")
-    if np.issubdtype(dtype, np.complexfloating) and dtype != _complex_dtype():
+    if np.issubdtype(dtype, np.complexfloating) and dtype != complex_of(float_dtype()):
         return LeafViolation(name, kind, dtype.name, "complex dtype is not active")
     if jnp.issubdtype(dtype, jnp.floating) and dtype != float_dtype():
         if not (allowed and dtype.itemsize < float_dtype().itemsize):
