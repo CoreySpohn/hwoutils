@@ -11,6 +11,8 @@ if importlib.util.find_spec("hwoutils.testbudget") is not None:
     pytest_plugins.append("hwoutils.testbudget.plugin")
 if importlib.util.find_spec("hwoutils.internal_refs") is not None:
     pytest_plugins.append("hwoutils.internal_refs")
+if importlib.util.find_spec("hwoutils.precision_guard") is not None:
+    pytest_plugins.append("hwoutils.precision_guard")
 if importlib.util.find_spec("hwoutils.leaves_contract") is not None:
     pytest_plugins.append("hwoutils.leaves_contract")
 

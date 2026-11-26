@@ -116,8 +116,9 @@ def _convert_float_width(x):
     if x.dtype == np.float32:
         # Bits 0..22 count subnormal units. Arithmetic in float64 is exact.
         bits = jnp.abs(x).view(jnp.uint32)
-        wide = x.astype(jnp.float64)
-        subnormal = jnp.copysign(bits.astype(jnp.float64) * step, wide)
+        wide = x.astype(jnp.float64)  # precision-ok: float64 result for normal values
+        units = bits.astype(jnp.float64)  # precision-ok: preserve float32 subnormals
+        subnormal = jnp.copysign(units * step, wide)
         return jnp.where(bits < (1 << single.nmant), subnormal, wide)
     # Round the magnitude to the nearest subnormal significand, ties to even.
     magnitude = jnp.minimum(jnp.abs(x), float(single.tiny))
