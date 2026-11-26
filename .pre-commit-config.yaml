@@ -7,6 +7,13 @@ repos:
         language: script
         types: [text]
         exclude: ^CHANGELOG\.md$
+      - id: precision-guard
+        name: floating-point precision guard
+        entry: src/hwoutils/precision_guard.py
+        language: script
+        types: [python]
+        files: ^(src|tests)/
+        args: [--enforce]
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: "v6.0.0"
     hooks:
