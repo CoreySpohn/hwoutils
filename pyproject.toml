@@ -109,8 +109,11 @@ optional_dependencies_dev_groups = ["dev", "docs", "test"]
 # JAX loads its compiled backend; keep the explicit minimum version constraint.
 DEP002 = ["jaxlib"]
 # The optional testbudget plugin imports pytest and uses psutil when available;
-# both are supplied by the test extra, with a stdlib fallback for psutil.
-DEP004 = ["pytest", "psutil"]
+# both are supplied by the test extra, with a stdlib fallback for psutil. The
+# precision plugin reads the junit reporter stash key from _pytest.junitxml, which
+# has no public counterpart (record_testsuite_property is a fixture and the reporter
+# is not reachable from it at session end); _pytest ships inside the pytest package.
+DEP004 = ["pytest", "_pytest", "psutil"]
 
 [tool.ty.environment]
 python-version = "3.11"
