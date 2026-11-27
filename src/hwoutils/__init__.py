@@ -17,6 +17,7 @@ _EXPORTS = {
     "complex_of": "precision",
     "enable_x64": "precision",
     "float_dtype": "precision",
+    "interp_linear": "interpolation",
     "like": "precision",
     "precision_of": "precision",
     "require_float64": "precision",
