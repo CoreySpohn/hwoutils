@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.0](https://github.com/CoreySpohn/hwoutils/compare/v2.1.0...v3.0.0) (2026-11-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **leaves:** strong JAX floats keep their precision; canonical(precision=); tree checks against the tree's own precision
+* **fft:** remove the unused phasor argument and reduce shifts by the padded length
+* **fft:** keep complex input complex, crop each axis by its own length, refuse clamped complex
+* **epoch:** name the date dialect with jd= or mjd= and refuse a bare number
+
+### Features
+
+* add GM_SUN_AU3_PER_D2 to constants ([86559b6](https://github.com/CoreySpohn/hwoutils/commit/86559b6da329528390cc77c29a2ded5727ec3bd2))
+* **blocks:** blocks declare walls and model nodes declare tied fields checked by check_ties ([387845c](https://github.com/CoreySpohn/hwoutils/commit/387845cdeb5255deb0801ce7a902091d475dbd67))
+* **epoch:** name the date dialect with jd= or mjd= and refuse a bare number ([c695147](https://github.com/CoreySpohn/hwoutils/commit/c695147a7aff8b2d7bf24e1ee1108aa1b2e95c34))
+* **hwoutils:** add interp_linear, a typed table reader linear in its values ([e8f7d22](https://github.com/CoreySpohn/hwoutils/commit/e8f7d2200a80e5293755c356096adb4aae0b3b19))
+* **leaves:** add leaf converters, predicates, HostGrid, entry check and a report-only contract plugin ([4b32d22](https://github.com/CoreySpohn/hwoutils/commit/4b32d225084e6d025be27f30d577f311fa2b569b))
+* **leaves:** let a HostGrid convert through np.asarray ([456fea3](https://github.com/CoreySpohn/hwoutils/commit/456fea3ceca1e34c02a0922f963a5dcbf872d723))
+* **leaves:** strong JAX floats keep their precision; canonical(precision=); tree checks against the tree's own precision ([19c1d81](https://github.com/CoreySpohn/hwoutils/commit/19c1d8164ab118addca1df8a5cb55e64663e139e))
+* **memory:** estimate, batch or refuse before a large allocation ([25af478](https://github.com/CoreySpohn/hwoutils/commit/25af478c4b6392089da3aea5ad011307ce18579b))
+* **precision:** add hwoutils.precision and hwoutils.numerics with PrecisionError ([f8c3f48](https://github.com/CoreySpohn/hwoutils/commit/f8c3f48d7b4aead548c94e94e6ccba6ecb58a41a))
+* **testing:** precision lanes, closure and pair helpers, report-only precision guard ([f43acfe](https://github.com/CoreySpohn/hwoutils/commit/f43acfefe0161477d3e0bba61f00785c88ae3012))
+
+
+### Bug Fixes
+
+* **blocks:** check_ties covers a written source only through an entry that writes the derived field and reads or writes that source ([600c82a](https://github.com/CoreySpohn/hwoutils/commit/600c82ab714ed463af1c5ade77aa2db23f56efd3))
+* **conversions:** combine Jy and h constants first so float32 does not underflow ([17fc72e](https://github.com/CoreySpohn/hwoutils/commit/17fc72e5d5d603294255afabcdd39e06a857fd21))
+* **fft:** build the shift phase ramp from the shift so complex64 takes the right Nyquist branch ([cfbd7a2](https://github.com/CoreySpohn/hwoutils/commit/cfbd7a24bb9211294646a4a4ba95fedc72795819))
+* **fft:** keep complex input complex, crop each axis by its own length, refuse clamped complex ([8a98ccc](https://github.com/CoreySpohn/hwoutils/commit/8a98cccaefcaa1cfb4083657a9bb81a8d348c815))
+* **fft:** remove the unused phasor argument and reduce shifts by the padded length ([2291879](https://github.com/CoreySpohn/hwoutils/commit/229187939341cbed61cbf9a8fe2c22bf455b4655))
+* **leaves:** accept typed keys, skip equinox modules, refuse overflow, flag bfloat16, and document the leaf rule ([f949801](https://github.com/CoreySpohn/hwoutils/commit/f949801b2ca254944fd45fb74a03e9ae2108fc27))
+* **leaves:** exempt equinox wrappers but not eqx.Partial, and truncate values in refusal messages ([f8f9aaa](https://github.com/CoreySpohn/hwoutils/commit/f8f9aaabce76694847673c3308af48c7ac4568f1))
+* **leaves:** refuse non-fitting integers and float overflow or underflow, reject typed keys, exempt only equinox.nn ([6c44957](https://github.com/CoreySpohn/hwoutils/commit/6c44957489415b9941561ac17401b632165663cc))
+* **leaves:** show a HostGrid's ends as plain floats ([7cdac9c](https://github.com/CoreySpohn/hwoutils/commit/7cdac9c2ba783562bb7a5ffeb44672c381f97473))
+* **leaves:** stage canonical conversions on a device of the target sharding, not on the CPU backend ([955b974](https://github.com/CoreySpohn/hwoutils/commit/955b974955a124986ec9a0ea0127f22887711591))
+* **leaves:** stage canonical conversions on the target device so no leaf is built on the default device ([1741eb1](https://github.com/CoreySpohn/hwoutils/commit/1741eb1447219e3841ae846e1ac75db1afdc4d6d))
+* **leaves:** take the source dtype from traced leaves ([967bffb](https://github.com/CoreySpohn/hwoutils/commit/967bffb1cafb63b83726b6cec2b01ca6b85b9d22))
+* **precision:** host values never set a precision; canonical keeps bulk storage; one wavelength tolerance ([3dafdf9](https://github.com/CoreySpohn/hwoutils/commit/3dafdf989502313d40382b0756ad4c89e61f3da2))
+* **testing:** set the lane before conftests import, scale-aware precision_pair, zero is not a tolerance ([612f331](https://github.com/CoreySpohn/hwoutils/commit/612f3318e7db877bea9e2e87d7c33d28179f9562))
+
 ## [2.1.0](https://github.com/CoreySpohn/hwoutils/compare/v2.0.0...v2.1.0) (2026-11-20)
 
 
