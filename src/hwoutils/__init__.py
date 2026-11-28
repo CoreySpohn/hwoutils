@@ -21,6 +21,7 @@ _EXPORTS = {
     "interp_linear": "interpolation",
     "like": "precision",
     "precision_of": "precision",
+    "provenance": "provenance",
     "require_float64": "precision",
     "set_host_device_count": "jax_config",
     "set_platform": "jax_config",
@@ -42,7 +43,8 @@ def __getattr__(name):
         AttributeError: If ``name`` is not a lazy public export.
     """
     if name in _EXPORTS:
-        value = getattr(_import_module(f"hwoutils.{_EXPORTS[name]}"), name)
+        module = _import_module(f"hwoutils.{_EXPORTS[name]}")
+        value = module if name == "provenance" else getattr(module, name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

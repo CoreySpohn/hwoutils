@@ -36,6 +36,7 @@ constants_and_conversions
 jax_configuration
 interpolation
 model_paths_and_blocks
+provenance
 leaves
 memory
 testbudget
