@@ -176,6 +176,14 @@ def test_bind_reads_rewrites_root_nested_and_held_owners():
     Truth: the owner-to-model mapping and the exact paths written by hand.
     """
     scene = prov.qualify("scene", ("star", "dynamics.frame", ""))
+    indexed = prov.qualify("scene", ("[0].x", "[1]", "a[2].y"))
+    assert indexed == ("scene[0].x", "scene[1]", "scene.a[2].y")
+    assert prov.bind_reads(indexed, {"scene": "children[3]"}) == (
+        "children[3][0].x",
+        "children[3][1]",
+        "children[3].a[2].y",
+    )
+    assert prov.bind_reads(indexed, {"scene": ""}) == ("[0].x", "[1]", "a[2].y")
     instrument = prov.qualify("instrument", ("band", ""))
     held = prov.qualify("sampling", ("grid",))
     assert scene == ("scene.star", "scene.dynamics.frame", "scene")

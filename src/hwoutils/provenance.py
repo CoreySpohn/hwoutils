@@ -16,6 +16,7 @@ from hwoutils.leaves import HostGrid
 Stamps = tuple[tuple[str, str], ...]
 UNKNOWN = "unknown"
 _LABEL = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*")
+_OWNER = re.compile(r"[A-Za-z_]\w*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -254,7 +255,9 @@ def bind_reads(
     """
     bound = []
     for read in reads:
-        owner, _, relative = read.partition(".")
+        match = _OWNER.match(read)
+        owner = match.group() if match else read
+        relative = read[len(owner) :].removeprefix(".")
         if owner not in roots:
             raise ValueError(
                 f"unknown read owner {owner!r}; known owners: {sorted(roots)}"
