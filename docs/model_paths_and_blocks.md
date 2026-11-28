@@ -7,6 +7,74 @@ node must provide. Both need the `jax` extra.
 
 ## A path names a node
 
+A tuple or list member with a unique string `name` can be reached by that name.
+Names are case-sensitive. They start with an ASCII letter or underscore and
+can then contain ASCII letters, digits, underscores and hyphens. Keys have
+no quoting or escaping. Use an index for an empty, duplicated or otherwise
+unaddressable name. A key consisting entirely of digits is always an index.
+Keys chain from left to right, as in `groups[inner][2]`.
+
+```python
+import equinox as eqx
+import jax
+from hwoutils.leaves import as_float_leaf
+from hwoutils.model_paths import (
+    assign_many,
+    canonical_path,
+    display_path,
+    resolve,
+    scale_at,
+)
+
+
+class Shift(eqx.Module):
+    shift: jax.Array = eqx.field(converter=as_float_leaf)
+
+
+class Stage(eqx.Module):
+    name: str = eqx.field(static=True)
+    op: Shift
+
+
+class OpticalPath(eqx.Module):
+    stages: tuple[Stage, ...]
+
+
+optics = OpticalPath(
+    (
+        Stage("entrance", Shift(1.0)),
+        Stage("mask", Shift(2.0)),
+        Stage("stop", Shift(3.0)),
+    )
+)
+path = "stages[mask].op.shift"
+assert float(resolve(optics, path)) == 2.0
+assert canonical_path(optics, path) == "stages[1].op.shift"
+assert display_path(optics, "stages[01].op.shift") == path
+
+scaled = scale_at(optics, path, 2.0)
+assert float(resolve(scaled, path)) == 4.0
+changed = assign_many(scaled, {"stages[0].op.shift": 5.0, path: 6.0}, convert=True)
+assert float(resolve(changed, "stages[entrance].op.shift")) == 5.0
+assert float(resolve(changed, path)) == 6.0
+
+try:
+    assign_many(optics, {path: 5.0, "stages[1].op.shift": 6.0})
+except ValueError as error:
+    assert path in str(error) and "stages[1].op.shift" in str(error)
+else:
+    raise AssertionError("both paths select the same node")
+```
+
+| Function | Use |
+|---|---|
+| `canonical_path` | Resolve names and numeric aliases to plain indices before comparing paths. |
+| `display_path` | Show unique names where the model can resolve them. |
+| `assign` | Replace one node, with optional field conversion. Use `None` to clear an optional slot. |
+| `assign_many` | Replace disjoint nodes together using the original model for all lookups. |
+| `apply_at` | Read a node, call a function with it, and assign the result. |
+| `scale_at` | Multiply an inexact JAX array leaf while keeping its precision. |
+
 A model is an Equinox module, often nested. Here a star and a tuple of planets stand in for
 the scene of a real fit.
 
@@ -137,7 +205,8 @@ A host that frees several blocks needs two guarantees: no path has two writers, 
 block that reads a path runs after the block that writes it. `check_writers` refuses the
 first failure and `block_order` returns an order that satisfies the second. Below, a block
 that reads the star mass is listed before the block that writes it, and `block_order` puts
-the writer first.
+the writer first. Supply `model=` to compare name keys and numeric aliases
+against the same model.
 
 ```python continuation
 mass = LogNormalBlock("star.mass_Msun", mean=0.0, sd=0.1)

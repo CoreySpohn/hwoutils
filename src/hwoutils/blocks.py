@@ -21,12 +21,13 @@ extra.
 
 from abc import abstractmethod
 from collections.abc import Iterable, Mapping
+from typing import NamedTuple
 
 import equinox as eqx
 from jax import Array
 from jax.typing import ArrayLike
 
-from hwoutils.model_paths import ancestors, join, paths_overlap
+from hwoutils.model_paths import ancestors, canonical_path, join, paths_overlap
 
 
 class AbstractBlock(eqx.Module):
@@ -204,8 +205,31 @@ class AbstractBlock(eqx.Module):
         """
 
 
+class _CanonicalBlock(NamedTuple):
+    key: str
+    owns: str
+    writes: tuple[tuple[str, str], ...]
+    reads: tuple[str, ...]
+
+
+def _canonical_blocks(blocks, model):
+    normalized = [
+        (
+            key,
+            _CanonicalBlock(
+                canonical_path(model, key),
+                canonical_path(model, block.owns),
+                tuple((path, canonical_path(model, path)) for path in block.writes),
+                tuple(canonical_path(model, path) for path in block.reads),
+            ),
+        )
+        for key, block in blocks.items()
+    ]
+    return dict(normalized)
+
+
 def check_writers(
-    blocks: Mapping[str, AbstractBlock], leaf_paths: Iterable[str] = ()
+    blocks: Mapping[str, AbstractBlock], leaf_paths: Iterable[str] = (), *, model=None
 ) -> None:
     """Refuse two writers of one path.
 
@@ -215,35 +239,49 @@ def check_writers(
     Args:
         blocks: Mapping from block key to block.
         leaf_paths: Model paths written by free leaf laws.
+        model: Optional model used to resolve aliases before comparing paths.
 
     Raises:
         ValueError: Naming the path and both writers when a block's key is not its
             owned path, two blocks write overlapping paths, or a leaf law overlaps a
             path a block writes.
     """
-    writers: list[tuple[str, str]] = []
+    normalized = _canonical_blocks(blocks, model) if model is not None else {}
+    leaves = tuple(
+        (path, canonical_path(model, path) if model is not None else path)
+        for path in leaf_paths
+    )
+    writers: list[tuple[str, str, str]] = []
     for key, block in blocks.items():
-        if key != block.owns:
+        entry = normalized.get(key)
+        lookup, owns = (key, block.owns) if entry is None else (entry.key, entry.owns)
+        if lookup != owns:
             raise ValueError(
                 f"block entry {key!r} must be keyed by the path it owns, {block.owns!r}"
             )
-        writers.extend((path, f"block {key!r}") for path in block.writes)
-    writers.extend((path, f"free leaf {path!r}") for path in leaf_paths)
-    for i, (path_a, who_a) in enumerate(writers):
-        for path_b, who_b in writers[i + 1 :]:
-            if who_a != who_b and paths_overlap(path_a, path_b):
-                raise ValueError(
-                    f"path {path_a!r} has two writers: {who_a} and {who_b}"
-                )
+        writes = (
+            ((path, path) for path in block.writes) if entry is None else entry.writes
+        )
+        writers.extend(
+            (path, canonical, f"block {key!r}") for path, canonical in writes
+        )
+    writers.extend(
+        (path, canonical, f"free leaf {path!r}") for path, canonical in leaves
+    )
+    for i, (path, a, who_a) in enumerate(writers):
+        for _, b, who_b in writers[i + 1 :]:
+            if who_a != who_b and paths_overlap(a, b):
+                raise ValueError(f"path {path!r} has two writers: {who_a} and {who_b}")
 
 
-def block_order(blocks: Mapping[str, AbstractBlock]) -> tuple[str, ...]:
+def block_order(blocks: Mapping[str, AbstractBlock], *, model=None) -> tuple[str, ...]:
     """Keys ordered so each block runs after the blocks that write what it reads.
 
     The order is stable (ties keep the mapping's order).
 
     Args:
         blocks: Mapping from block key to block.
+        model: Optional model used to resolve aliases before comparing paths.
 
     Returns:
         The keys of ``blocks`` in an order where every writer of a path comes before
@@ -253,14 +291,21 @@ def block_order(blocks: Mapping[str, AbstractBlock]) -> tuple[str, ...]:
         ValueError: If the blocks read each other's writes in a cycle.
     """
     keys = list(blocks)
+    if model is None:
+        writes = {key: block.writes for key, block in blocks.items()}
+        reads = {key: block.reads for key, block in blocks.items()}
+    else:
+        normalized = _canonical_blocks(blocks, model)
+        writes = {
+            key: tuple(path for _, path in entry.writes)
+            for key, entry in normalized.items()
+        }
+        reads = {key: entry.reads for key, entry in normalized.items()}
     after = {
         k: {
             j
             for j in keys
-            if j != k
-            and any(
-                paths_overlap(w, r) for w in blocks[j].writes for r in blocks[k].reads
-            )
+            if j != k and any(paths_overlap(w, r) for w in writes[j] for r in reads[k])
         }
         for k in keys
     }
@@ -300,27 +345,47 @@ def check_ties(
     Raises:
         ValueError: Naming the path, the derived field and the way out.
     """
-    reads = reads or {}
-    touched = {key: (*paths, *reads.get(key, ())) for key, paths in writes.items()}
-    for path in (p for paths in writes.values() for p in paths):
+
+    def normalize(path):
+        return canonical_path(model, path) if model is not None else path
+
+    written = [
+        (key, tuple((path, normalize(path)) for path in paths))
+        for key, paths in writes.items()
+    ]
+    reading = [
+        (key, tuple(normalize(path) for path in paths))
+        for key, paths in (reads or {}).items()
+    ]
+    canonical_reads = dict(reading)
+    write_paths = {key: tuple(path for _, path in paths) for key, paths in written}
+    touched = {
+        key: (*paths, *canonical_reads.get(key, ()))
+        for key, paths in write_paths.items()
+    }
+    for path, canonical in (pair for _, paths in written for pair in paths):
         for prefix, node in ancestors(model, path):
             for derived, sources in getattr(node, "tied_fields", {}).items():
                 target = join(prefix, derived)
-                if len(path) > len(target) and paths_overlap(path, target):
+                target_path = normalize(target)
+                if len(canonical) > len(target_path) and paths_overlap(
+                    canonical, target_path
+                ):
                     raise ValueError(
                         f"free path {path!r} lies inside {target!r}, whose fields "
                         f"are tied together: free it through a block at {target!r}"
                     )
                 for source in (join(prefix, s) for s in sources):
-                    if not paths_overlap(path, source):
+                    source_path = normalize(source)
+                    if not paths_overlap(canonical, source_path):
                         continue
                     covered = any(
                         any(
-                            paths_overlap(w, target) and len(w) <= len(target)
-                            for w in writes[key]
+                            paths_overlap(w, target_path) and len(w) <= len(target_path)
+                            for w in paths
                         )
-                        and any(paths_overlap(t, source) for t in touched[key])
-                        for key in writes
+                        and any(paths_overlap(t, source_path) for t in touched[key])
+                        for key, paths in write_paths.items()
                     )
                     if not covered:
                         raise ValueError(

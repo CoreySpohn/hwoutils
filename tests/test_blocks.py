@@ -1,5 +1,6 @@
 """Model paths and the block base: reading, writing, refusal and order."""
 
+import re
 from types import MappingProxyType
 from typing import ClassVar
 
@@ -236,3 +237,57 @@ def test_ancestors_start_at_the_root_and_stop_before_the_path():
     assert list(ancestors(model, "")) == []
     found = [p for p, _ in ancestors(_model(), "planets[1]")]
     assert found == ["", "planets"]
+
+
+class _NamedTiedNode(_TiedNode):
+    name: str = eqx.field(static=True)
+
+
+class _NamedParent(eqx.Module):
+    nodes: tuple[_NamedTiedNode, ...]
+
+
+@pytest.fixture(scope="module")
+def named_parent():
+    node = _tied()
+    return _NamedParent(
+        (
+            _NamedTiedNode(node.a, node.b, "first"),
+            _NamedTiedNode(node.a, node.b, "second"),
+        )
+    )
+
+
+def test_block_checks_compare_aliases_with_a_model(named_parent):
+    """Fails if aliases hide a second writer or a read dependency.
+
+    Truth: exact canonical overlap of index and name paths.
+    """
+    named, indexed = "nodes[first].a", "nodes[0].a"
+    reader_path = "nodes[second].a"
+    writer = _Block(indexed, writes=(indexed,))
+    alias_writer = _Block(named, writes=(named,))
+    both = {indexed: writer, named: alias_writer}
+    check_writers(both)
+    check_writers({indexed: writer}, leaf_paths=(named,))
+    check_writers({named: writer}, model=named_parent)
+    for blocks, leaves in ((both, ()), ({indexed: writer}, (named,))):
+        with pytest.raises(ValueError, match="two writers") as error:
+            check_writers(blocks, leaf_paths=leaves, model=named_parent)
+        assert indexed in str(error.value) and named in str(error.value)
+    reader = _Block(reader_path, reads=(named,), writes=(reader_path,))
+    along = {reader_path: reader, indexed: writer}
+    assert block_order(along) == (reader_path, indexed)
+    assert block_order(along, model=named_parent) == (indexed, reader_path)
+
+
+def test_check_ties_follows_name_keys_and_canonical_reads(named_parent):
+    """Fails if an alias permits a write inside a tie or hides a covering read.
+
+    Truth: exact derived-field rule declared on the named fixture node.
+    """
+    inside = "nodes[first].b.x"
+    with pytest.raises(ValueError, match=re.escape(inside) + ".*tied together"):
+        check_ties(named_parent, {inside: (inside,)})
+    writes = {"source": ("nodes[first].a",), "derived": ("nodes[0].b",)}
+    check_ties(named_parent, writes, reads={"derived": ("nodes[00].a",)})
