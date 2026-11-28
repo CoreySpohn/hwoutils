@@ -85,3 +85,22 @@ assert float(epoch.jd(time_d)) == const.J2000_JD + 365.25
 An epoch carries a time scale label, `tdb` by default, and never converts between
 scales. Handing it a time object such as an `astropy.time.Time` on a different scale
 raises, instead of treating the two scales as one.
+
+Use `elapsed_seconds` from the JAX extra to convert times in days to seconds
+from a Python float origin. A nonzero origin requires double-precision
+subtraction, so absolute float32 times raise `PrecisionError`. If the
+original times are on the host, form the elapsed seconds there from those values. For traced absolute times, enable x64 and
+supply the original times in float64. A zero origin keeps the available
+precision of an explicit float32 or float64 input.
+
+```python
+import numpy as np
+from hwoutils import elapsed_seconds
+from hwoutils.constants import s2d
+
+origin_d = 2461000.5
+elapsed_s = elapsed_seconds([origin_d, origin_d + s2d], origin_d=origin_d)
+# A float64 Julian date at this magnitude has a spacing of about 40 microseconds.
+assert elapsed_s[0] == 0.0
+assert abs(elapsed_s[1] - 1.0) <= np.spacing(origin_d) / s2d
+```

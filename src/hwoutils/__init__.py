@@ -15,6 +15,7 @@ except ModuleNotFoundError:
 _EXPORTS = {
     "PrecisionError": "precision",
     "complex_of": "precision",
+    "elapsed_seconds": "epoch",
     "enable_x64": "precision",
     "float_dtype": "precision",
     "interp_linear": "interpolation",
